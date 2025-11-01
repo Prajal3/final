@@ -52,32 +52,32 @@ export const setUpSocket = (server) => {
     });
 
     socket.on('user-call', ({ to, offer, groupId }) => {
-      const callId = uuidv4();
-      if (groupId) {
-        console.log(`Emitting incoming-call to group ${groupId} from ${socket.userId} with callId: ${callId}`);
-        activeCalls.add(callId);
-        io.to(groupId).emit('incoming-call', {
-          from: socket.userId,
-          offer,
-          callId,
-          groupId,
-        });
-      } else {
-        const receiverSocketId = onlineUsers.get(to);
-        if (receiverSocketId) {
-          console.log(`Emitting incoming-call to ${to} from ${socket.userId} with callId: ${callId}`);
-          activeCalls.add(callId);
-          io.to(receiverSocketId).emit('incoming-call', {
-            from: socket.userId,
-            offer,
-            callId,
-          });
-        } else {
-          console.log(`User ${to} is offline`);
-          io.to(socket.id).emit('user-offline', { userId: to });
-        }
-      }
+  const callId = uuidv4();
+  if (groupId) {
+    console.log(`Emitting incoming-call to group ${groupId}`);
+    activeCalls.add(callId);
+    io.to(groupId).emit('incoming-call', {
+      from: socket.userId,
+      offer,
+      callId,
+      groupId,
     });
+  } else {
+    const receiverSocketId = onlineUsers.get(to);
+    if (receiverSocketId) {
+      console.log(`Emitting incoming-call to ${to}`);
+      activeCalls.add(callId);
+      io.to(receiverSocketId).emit('incoming-call', {
+        from: socket.userId,
+        offer,
+        callId,
+      });
+    } else {
+      console.log(`User ${to} is offline`);
+      io.to(socket.id).emit('user-offline', { userId: to });
+    }
+  }
+});
 
     socket.on('call-accepted', ({ to, answer, callId, groupId }) => {
       if (groupId) {

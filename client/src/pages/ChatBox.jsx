@@ -1,7 +1,7 @@
 import { useEffect, useState, useRef } from 'react';
 import { ImageIcon, SendHorizonal, Phone, Video, Mic, MicOff, VideoOff, Maximize2, Minimize2, X, RefreshCw } from 'lucide-react';
 import useAuth from '../hooks/useAuth';
-import { useParams } from 'react-router-dom';
+import { useLocation, useParams } from 'react-router-dom';
 import API from '../api/api';
 import { socket } from '../utils/socket';
 import useWebRTC from '../hooks/useWebRTC';
@@ -66,42 +66,7 @@ const MessageList = ({ messages, user }) => {
   );
 };
 
-// Incoming Call Modal Component
-const IncomingCallModal = ({ caller, onAccept, onReject, callId }) => (
-  <motion.div
-    className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50"
-    initial={{ opacity: 0 }}
-    animate={{ opacity: 1 }}
-    exit={{ opacity: 0 }}
-    transition={{ duration: 0.3 }}
-  >
-    <motion.div
-      className="bg-white p-6 rounded-lg shadow-lg flex flex-col items-center gap-4 max-w-sm w-full"
-      initial={{ scale: 0.8, y: 50 }}
-      animate={{ scale: 1, y: 0 }}
-      transition={{ duration: 0.3 }}
-    >
-      <h2 className="text-lg font-semibold">Incoming Call</h2>
-      <p className="text-gray-600">From: {caller?.fullname || 'Unknown'}</p>
-      <div className="flex gap-4">
-        <button
-          onClick={() => onAccept()}
-          className="p-2 rounded-full bg-green-500 text-white hover:bg-green-600 transition"
-          aria-label="Accept call"
-        >
-          <Video size={24} />
-        </button>
-        <button
-          onClick={() => onReject(callId)}
-          className="p-2 rounded-full bg-red-500 text-white hover:bg-red-600 transition"
-          aria-label="Reject call"
-        >
-          <X size={24} />
-        </button>
-      </div>
-    </motion.div>
-  </motion.div>
-);
+//REmoved Incoming Call Modal Component
 
 // Chat Input Component
 const ChatInput = ({ text, setText, image, setImage, sendMessage }) => (
@@ -152,6 +117,7 @@ const ChatBox = () => {
   const { userId } = useParams();
   const messageEndRef = useRef(null);
 
+  const location = useLocation();
   // WebRTC hook
   const {
     localVideoRef,
@@ -206,6 +172,16 @@ const ChatBox = () => {
     };
     play();
   };
+
+  useEffect(() => {
+  if (location.state?.acceptCall && location.state?.incomingCall) {
+    const callData = location.state.incomingCall;
+    console.log('Accepting call from navigation:', callData);
+    acceptCall(callData);
+    // Clear the state to prevent re-accepting on re-render
+    window.history.replaceState({}, document.title);
+  }
+}, [location.state]);
 
   // Assign local stream to video element
   useEffect(() => {

@@ -1,20 +1,19 @@
-
 import React, { createContext, useContext, useReducer, useEffect } from 'react';
 import { AUTH_STATES, STORAGE_KEYS, ERROR_MESSAGES } from '../utils/constants';
-import API from '../api/api.js'
+import API from '../api/api.js';
 import Cookies from 'js-cookie';
-import { io } from 'socket.io-client';
-import { data } from 'react-router-dom';
+import { connectSocket, disconnectSocket } from '../utils/socket'; // ⭐ NEW IMPORT
+
 // Initial state
 const initialState = {
   user: null,
   isAuthenticated: false,
-  isLoading: true, // Start with loading true to check existing auth
+  isLoading: true,
   authState: AUTH_STATES.IDLE,
   error: null,
   successMessage: null,
-  pendingVerificationEmail: null, // For OTP flow
-  rememberEmail: '', // For login form
+  pendingVerificationEmail: null,
+  rememberEmail: '',
   socket: null
 };
 
@@ -206,19 +205,18 @@ export const AuthProvider = ({ children }) => {
     }
   };
 
-  // Auth action functions (mock implementations for now)
+  // Auth action functions
   const login = async (credentials) => {
     try {
       setLoading(true);
       clearMessages();
 
-      // Mock API call - replace with real API later
-      let data;
       const { email, password } = credentials;
-      data = await  API.post("auth/login",{email, password});
-      console.log(data.data)
-      await new Promise(resolve => setTimeout(resolve, 1000)); // Simulate API delay
-      localStorage.setItem("token",data.data.token)
+      const data = await API.post("auth/login", { email, password });
+      console.log(data.data);
+      
+      await new Promise(resolve => setTimeout(resolve, 1000));
+      localStorage.setItem("token", data.data.token);
       Cookies.set('token', data.data.token);
 
       const mockTokens = {
@@ -241,7 +239,10 @@ export const AuthProvider = ({ children }) => {
         payload: { user: data.data, tokens: mockTokens },
       });
 
-      return { success: true, user: mockUser };
+      // ⭐ CONNECT SOCKET AFTER SUCCESSFUL LOGIN
+      connectSocket(data.data._id);
+
+      return { success: true, user: data.data };
     } catch (error) {
       setError(error.message || ERROR_MESSAGES.UNEXPECTED_ERROR);
       return { success: false, error: error.message };
@@ -252,13 +253,10 @@ export const AuthProvider = ({ children }) => {
     try {
       setLoading(true);
       clearMessages();
-      let data;
 
-      // Mock API call - replace with real API later
       const { fullName, email, password } = userData;
-
-       data = await  API.post("auth/signup",{fullname: fullName, email, password});
-      await new Promise(resolve => setTimeout(resolve, 1000)); // Simulate API delay
+      const data = await API.post("auth/signup", { fullname: fullName, email, password });
+      await new Promise(resolve => setTimeout(resolve, 1000));
 
       dispatch({
         type: AUTH_ACTIONS.SIGNUP_SUCCESS,
@@ -277,19 +275,23 @@ export const AuthProvider = ({ children }) => {
       setLoading(true);
       clearMessages();
 
-      const data = await  API.post("auth/verifyOtp",{email, otp});
-      await new Promise(resolve => setTimeout(resolve, 1000)); // Simulate API delay
-
+      const data = await API.post("auth/verifyOtp", { email, otp });
+      await new Promise(resolve => setTimeout(resolve, 1000));
 
       dispatch({
         type: AUTH_ACTIONS.OTP_VERIFIED,
         payload: { user: data, tokens: data.token },
       });
 
+      // ⭐ CONNECT SOCKET AFTER OTP VERIFICATION
+      if (data.data?._id) {
+        connectSocket(data.data._id);
+      }
+
       return { success: true, user: data };
     } catch (error) {
       setError(error.response?.data.message || ERROR_MESSAGES.INVALID_OTP);
-      return { success: false, error: error.response.data.message };
+      return { success: false, error: error.response?.data.message };
     }
   };
 
@@ -298,8 +300,7 @@ export const AuthProvider = ({ children }) => {
       setLoading(true);
       clearMessages();
 
-      // Mock API call - replace with real API later
-      await new Promise(resolve => setTimeout(resolve, 1000)); // Simulate API delay
+      await new Promise(resolve => setTimeout(resolve, 1000));
 
       setSuccessMessage('Verification code sent successfully!');
       setLoading(false);
@@ -314,6 +315,9 @@ export const AuthProvider = ({ children }) => {
   const logout = async () => {
     try {
       setLoading(true);
+
+      // ⭐ DISCONNECT SOCKET BEFORE LOGOUT
+      disconnectSocket();
 
       // Clear localStorage
       removeFromStorage(STORAGE_KEYS.USER_DATA);
@@ -338,7 +342,7 @@ export const AuthProvider = ({ children }) => {
     }
   };
 
-  // Check for existing authentication on mount
+  // ⭐ MODIFIED: Check for existing authentication on mount
   useEffect(() => {
     const checkAuth = () => {
       const userData = getFromStorage(STORAGE_KEYS.USER_DATA);
@@ -346,6 +350,9 @@ export const AuthProvider = ({ children }) => {
       const rememberEmail = getFromStorage(STORAGE_KEYS.REMEMBER_EMAIL);
 
       if (userData && authToken) {
+        // ⭐ CONNECT SOCKET IF USER IS ALREADY LOGGED IN
+        connectSocket(userData._id);
+        
         dispatch({
           type: AUTH_ACTIONS.RESTORE_AUTH,
           payload: {
