@@ -3,6 +3,7 @@ import React, { createContext, useContext, useReducer, useEffect } from 'react';
 import { AUTH_STATES, STORAGE_KEYS, ERROR_MESSAGES } from '../utils/constants';
 import API from '../api/api.js'
 import Cookies from 'js-cookie';
+import { io } from 'socket.io-client';
 import { data } from 'react-router-dom';
 // Initial state
 const initialState = {
@@ -14,6 +15,7 @@ const initialState = {
   successMessage: null,
   pendingVerificationEmail: null, // For OTP flow
   rememberEmail: '', // For login form
+  socket: null
 };
 
 // Action types
