@@ -1,6 +1,7 @@
 import Story from "../models/story.model.js";
 import cloudinary from "../lib/cloudinary.js";
 import { notifyFollowers } from "./post.controller.js";
+import User from "../models/user.model.js";
 
 export const createStory = async (req, res) => {
   const { caption, background_color } = req.body; 
@@ -61,18 +62,30 @@ export const createStory = async (req, res) => {
 
 
 export const getStory = async (req, res) => {
-
-    const stories = await Story.find()
-        .populate("user", "fullname username profilePics")
-        .sort({ createdAt: -1 });
-    res.status(200).json({ success: true, stories });
     try {
+        const userId = req.user._id; // assuming you’re using authentication middleware
 
+        // Find the logged-in user to get their following list
+        const user = await User.findById(userId).select("following");
+
+        if (!user) {
+            return res.status(404).json({ success: false, message: "User not found" });
+        }
+
+        // Include user's own stories + stories from followed users
+        const userIds = [...user.following, userId];
+
+        // Fetch stories only from followed users (and self)
+        const stories = await Story.find({ user: { $in: userIds } })
+            .populate("user", "fullname username profilePics")
+            .sort({ createdAt: -1 });
+
+        res.status(200).json({ success: true, stories });
     } catch (error) {
+        console.error("Error fetching stories:", error);
         res.status(500).json({ success: false, message: "Internal server error" });
-
     }
-}
+};
 
 export const deleteStory = async (req, res) => {
     const { storyId } = req.params;
