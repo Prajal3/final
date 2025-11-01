@@ -1,5 +1,5 @@
 import { useNavigate } from 'react-router-dom';
-import { Bell, Heart, MessageCircle, UserPlus, ThumbsUp, CheckCircle } from 'lucide-react';
+import { Bell, Heart, MessageCircle, UserPlus, ThumbsUp, CheckCircle, FileText } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import clsx from 'clsx';
 import { useNotifications } from '../context/NotificationContext';
@@ -19,6 +19,16 @@ const Notifications = () => {
 
   const handleNavigate = (link) => {
     navigate(link);
+  };
+
+  // Helper function to extract post preview text
+  const getPostPreview = (noti) => {
+    if (noti.postContent) {
+      return noti.postContent.length > 50 
+        ? noti.postContent.substring(0, 50) + '...' 
+        : noti.postContent;
+    }
+    return null;
   };
 
   return (
@@ -53,63 +63,92 @@ const Notifications = () => {
                        scrollbar-thin scrollbar-thumb-slate-300 scrollbar-track-slate-100"
           >
             <AnimatePresence>
-              {notifications.map((noti) => (
-                <motion.div
-                  key={noti._id}
-                  initial={{ opacity: 0, y: 10 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  exit={{ opacity: 0 }}
-                  transition={{ duration: 0.3 }}
-                  className={clsx(
-                    "relative cursor-pointer flex items-start gap-4 p-5 border-b border-slate-100 hover:bg-slate-50 transition-all duration-200",
-                    !noti.read && "bg-blue-50/40"
-                  )}
-                  onClick={async () => {
-                    if (!noti.read) await markAsRead(noti._id);
-                    if (noti.link) navigate(noti.link);
-                  }}
-
-                >
-                  {/* New Badge Pulse */}
-                  {!noti.read && (
-                    <span className="absolute top-4 left-2 w-2.5 h-2.5 bg-blue-500 rounded-full animate-ping" />
-                  )}
-                  {!noti.read && (
-                    <span className="absolute top-4 left-2 w-2.5 h-2.5 bg-blue-500 rounded-full" />
-                  )}
-
-                  <div className="flex-shrink-0 mt-1 ml-4">
-                    {iconMap[noti.type] || (
-                      <Bell className="w-5 h-5 text-gray-400" />
+              {notifications.map((noti) => {
+                const postPreview = getPostPreview(noti);
+                
+                return (
+                  <motion.div
+                    key={noti._id}
+                    initial={{ opacity: 0, y: 10 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    exit={{ opacity: 0 }}
+                    transition={{ duration: 0.3 }}
+                    className={clsx(
+                      "relative cursor-pointer flex items-start gap-4 p-5 border-b border-slate-100 hover:bg-slate-50 transition-all duration-200",
+                      !noti.read && "bg-blue-50/40"
                     )}
-                  </div>
-
-                  <div className="flex-1">
-                    <p className="text-slate-800 text-sm sm:text-base font-medium leading-relaxed">
-                      {noti.message}
-                    </p>
-                    <p className="text-xs text-slate-500 mt-1">
-                      {new Date(noti.createdAt).toLocaleString()}
-                    </p>
-                  </div>
-
-                  <div className="flex-shrink-0">
-                    {!noti.read ? (
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          markAsRead(noti._id);
-                        }}
-                        className="text-xs text-blue-600 hover:text-blue-700 cursor-pointer flex items-center gap-1"
-                      >
-                        <CheckCircle className="w-4 h-4" /> Mark as read
-                      </button>
-                    ) : (
-                      <span className="text-xs text-slate-400 italic">Read</span>
+                    onClick={async () => {
+                      if (!noti.read) await markAsRead(noti._id);
+                      
+                      // Navigate based on notification type
+                      if (noti.type === 'comment')
+                      {
+                        const postId = noti.postId || noti.link?.split('/').pop();
+                        if (postId) {
+                          navigate(`/post/${postId}`);
+                        }
+                      }
+                      else if (noti.type === 'follow' || noti.type === 'connect') {
+                        // Navigate to connections page
+                        navigate('/connections');
+                      } else if (noti.link) {
+                        // For other types, use the provided link
+                        navigate(noti.link);
+                      }
+                    }}
+                  >
+                    {/* New Badge Pulse */}
+                    {!noti.read && (
+                      <span className="absolute top-4 left-2 w-2.5 h-2.5 bg-blue-500 rounded-full animate-ping" />
                     )}
-                  </div>
-                </motion.div>
-              ))}
+                    {!noti.read && (
+                      <span className="absolute top-4 left-2 w-2.5 h-2.5 bg-blue-500 rounded-full" />
+                    )}
+
+                    <div className="flex-shrink-0 mt-1 ml-4">
+                      {iconMap[noti.type] || (
+                        <Bell className="w-5 h-5 text-gray-400" />
+                      )}
+                    </div>
+
+                    <div className="flex-1">
+                      <p className="text-slate-800 text-sm sm:text-base font-medium leading-relaxed">
+                        {noti.message}
+                      </p>
+                      
+                      {/* Post Preview for like and comment notifications */}
+                      {postPreview && (noti.type === 'like' || noti.type === 'comment') && (
+                        <div className="mt-2 p-2.5 bg-slate-100 rounded-lg border border-slate-200 flex items-start gap-2">
+                          <FileText className="w-4 h-4 text-slate-400 flex-shrink-0 mt-0.5" />
+                          <p className="text-xs text-slate-600 italic line-clamp-2">
+                            "{postPreview}"
+                          </p>
+                        </div>
+                      )}
+                      
+                      <p className="text-xs text-slate-500 mt-1">
+                        {new Date(noti.createdAt).toLocaleString()}
+                      </p>
+                    </div>
+
+                    <div className="flex-shrink-0">
+                      {!noti.read ? (
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            markAsRead(noti._id);
+                          }}
+                          className="text-xs text-blue-600 hover:text-blue-700 cursor-pointer flex items-center gap-1"
+                        >
+                          <CheckCircle className="w-4 h-4" /> Mark as read
+                        </button>
+                      ) : (
+                        <span className="text-xs text-slate-400 italic">Read</span>
+                      )}
+                    </div>
+                  </motion.div>
+                );
+              })}
             </AnimatePresence>
           </div>
         )}
