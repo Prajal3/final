@@ -89,20 +89,21 @@ export const setUpSocket = (server) => {
 
     // ==================== VIDEO CALL HANDLERS ====================
 
-    // Initiate call
-    socket.on('user-call', ({ to, offer, groupId }) => {
+    // Initiate call - FIXED to include callId
+    socket.on('user-call', ({ to, offer, groupId, callId }) => {
       if (!socket.userId) {
         console.error('user-call: Socket not registered');
         return;
       }
 
-      const callId = uuidv4();
+      // Generate callId if not provided
+      const finalCallId = callId || uuidv4();
       
       if (groupId) {
         // Group call
-        console.log(`📞 Group call initiated by ${socket.userId} to group ${groupId}`);
+        console.log(`📞 Group call initiated by ${socket.userId} to group ${groupId}, callId: ${finalCallId}`);
         
-        activeCalls.set(callId, {
+        activeCalls.set(finalCallId, {
           initiator: socket.userId,
           groupId,
           participants: [socket.userId],
@@ -113,7 +114,7 @@ export const setUpSocket = (server) => {
         socket.to(groupId).emit('incoming-call', {
           from: socket.userId,
           offer,
-          callId,
+          callId: finalCallId,
           groupId,
         });
       } else if (to) {
@@ -126,9 +127,9 @@ export const setUpSocket = (server) => {
           return;
         }
 
-        console.log(`📞 Call initiated from ${socket.userId} to ${to}`);
+        console.log(`📞 Call initiated from ${socket.userId} to ${to}, callId: ${finalCallId}`);
         
-        activeCalls.set(callId, {
+        activeCalls.set(finalCallId, {
           initiator: socket.userId,
           receiver: to,
           participants: [socket.userId],
@@ -138,7 +139,7 @@ export const setUpSocket = (server) => {
         io.to(receiverSocketId).emit('incoming-call', {
           from: socket.userId,
           offer,
-          callId,
+          callId: finalCallId,
         });
       }
     });
@@ -146,6 +147,8 @@ export const setUpSocket = (server) => {
     // Accept call
     socket.on('call-accepted', ({ to, answer, callId, groupId }) => {
       if (!socket.userId) return;
+
+      console.log(`✅ Call accepted by ${socket.userId} for callId: ${callId}`);
 
       const call = activeCalls.get(callId);
       if (call && !call.participants.includes(socket.userId)) {
@@ -173,13 +176,17 @@ export const setUpSocket = (server) => {
             callId,
             from: socket.userId,
           });
-          console.log(`✅ Call accepted: ${socket.userId} -> ${to}`);
+          console.log(`✅ Call accepted: ${socket.userId} -> ${to}, callId: ${callId}`);
+        } else {
+          console.log(`❌ Cannot notify ${to} - not online`);
         }
       }
     });
 
     // Reject call
     socket.on('call-rejected', ({ to, callId, groupId }) => {
+      console.log(`❌ Call rejected by ${socket.userId}, callId: ${callId}`);
+      
       const call = activeCalls.get(callId);
       if (call) {
         activeCalls.delete(callId);
@@ -193,7 +200,7 @@ export const setUpSocket = (server) => {
         const receiverSocketId = onlineUsers.get(to);
         if (receiverSocketId) {
           io.to(receiverSocketId).emit('call-rejected', { callId });
-          console.log(`❌ Call ${callId} rejected by ${socket.userId}`);
+          console.log(`❌ Call ${callId} rejected, notified ${to}`);
         }
       }
     });
@@ -227,10 +234,12 @@ export const setUpSocket = (server) => {
 
     // End call
     socket.on('end-call', ({ to, callId, groupId }) => {
+      console.log(`📴 Call ended by ${socket.userId}, callId: ${callId}`);
+      
       const call = activeCalls.get(callId);
       if (call) {
         activeCalls.delete(callId);
-        console.log(`📴 Call ${callId} ended`);
+        console.log(`📴 Removed call ${callId} from active calls`);
       }
 
       if (groupId) {
@@ -241,6 +250,7 @@ export const setUpSocket = (server) => {
         const receiverSocketId = onlineUsers.get(to);
         if (receiverSocketId) {
           io.to(receiverSocketId).emit('end-call', { callId });
+          console.log(`📴 Notified ${to} that call ended`);
         }
       }
     });
@@ -275,6 +285,7 @@ export const setUpSocket = (server) => {
             }
           }
           activeCalls.delete(callId);
+          console.log(`📴 Cleaned up call ${callId} due to disconnect`);
         }
       });
     });

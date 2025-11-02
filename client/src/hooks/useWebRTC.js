@@ -18,6 +18,7 @@ const useWebRTC = (userId, targetId, isGroupCall = false, groupMembers = []) => 
   const pendingCandidatesRef = useRef({});
   const isInitiatorRef = useRef(false);
   const cleanupInProgressRef = useRef(false);
+  const isUnmountingRef = useRef(false);
 
   const ICE_SERVERS = {
     iceServers: [
@@ -161,11 +162,12 @@ const useWebRTC = (userId, targetId, isGroupCall = false, groupMembers = []) => 
   // Start video call
   const startVideoCall = async () => {
     if (isVideoCallActive || cleanupInProgressRef.current) {
-      console.log('Call already active or cleanup in progress');
+      console.log('⚠️ Call already active or cleanup in progress');
       return;
     }
 
     try {
+      console.log('📞 Starting video call...');
       setCallStatus('Starting call...');
       isInitiatorRef.current = true;
       
@@ -177,28 +179,34 @@ const useWebRTC = (userId, targetId, isGroupCall = false, groupMembers = []) => 
         ? groupMembers.filter(m => m._id !== userId).map(m => m._id)
         : [targetId];
 
+      console.log('📤 Sending call to:', targets);
+
       for (const remoteUserId of targets) {
         const pc = createPeerConnection(remoteUserId);
         
         // Add tracks
         stream.getTracks().forEach(track => {
           pc.addTrack(track, stream);
+          console.log('➕ Added track:', track.kind);
         });
 
         // Create and send offer
+        console.log('🔄 Creating offer for:', remoteUserId);
         const offer = await pc.createOffer();
         await pc.setLocalDescription(offer);
 
         socket.emit('user-call', {
           to: remoteUserId,
           offer: offer,
+          callId: activeCallIdRef.current,
           groupId: isGroupCall ? targetId : null,
         });
+        console.log('📤 Offer sent to:', remoteUserId);
       }
 
       setCallStatus('Calling...');
     } catch (error) {
-      console.error('Start call error:', error);
+      console.error('❌ Start call error:', error);
       setCallStatus('Failed to start call: ' + error.message);
       endVideoCall();
     }
@@ -206,12 +214,19 @@ const useWebRTC = (userId, targetId, isGroupCall = false, groupMembers = []) => 
 
   // Accept call
   const acceptCall = async ({ from, offer, callId, groupId }) => {
-    if (isVideoCallActive || cleanupInProgressRef.current) {
-      console.log('Already in call');
+    // Wait for cleanup to complete if in progress
+    if (cleanupInProgressRef.current) {
+      console.log('⏳ Waiting for cleanup before accepting call...');
+      await new Promise(resolve => setTimeout(resolve, 600));
+    }
+
+    if (isVideoCallActive) {
+      console.log('❌ Already in call, cannot accept');
       return;
     }
 
     try {
+      console.log('📞 Accepting call from:', from);
       setCallStatus('Accepting call...');
       isInitiatorRef.current = false;
       activeCallIdRef.current = callId;
@@ -224,15 +239,21 @@ const useWebRTC = (userId, targetId, isGroupCall = false, groupMembers = []) => 
       // Add tracks
       stream.getTracks().forEach(track => {
         pc.addTrack(track, stream);
+        console.log('➕ Added track to peer connection:', track.kind);
       });
 
       // Set remote description and create answer
+      console.log('🔄 Setting remote description');
       await pc.setRemoteDescription(new RTCSessionDescription(offer));
+      
+      console.log('🔄 Processing pending ICE candidates');
       await processPendingCandidates(from);
 
+      console.log('🔄 Creating answer');
       const answer = await pc.createAnswer();
       await pc.setLocalDescription(answer);
 
+      console.log('📤 Sending answer to caller');
       socket.emit('call-accepted', {
         to: from,
         answer: answer,
@@ -242,8 +263,9 @@ const useWebRTC = (userId, targetId, isGroupCall = false, groupMembers = []) => 
 
       setCallStatus('Connected');
       setIncomingCall(null);
+      console.log('✅ Call accepted successfully');
     } catch (error) {
-      console.error('Accept call error:', error);
+      console.error('❌ Accept call error:', error);
       setCallStatus('Failed to accept call: ' + error.message);
       endVideoCall();
     }
@@ -282,12 +304,12 @@ const useWebRTC = (userId, targetId, isGroupCall = false, groupMembers = []) => 
   // End video call
   const endVideoCall = useCallback(() => {
     if (cleanupInProgressRef.current) {
-      console.log('Cleanup already in progress, skipping...');
+      console.log('⚠️ Cleanup already in progress, skipping...');
       return;
     }
     
     cleanupInProgressRef.current = true;
-    console.log('Ending call...');
+    console.log('📴 Ending call...');
 
     // Emit end-call FIRST if we're in an active call
     if (activeCallIdRef.current && isVideoCallActive) {
@@ -308,7 +330,7 @@ const useWebRTC = (userId, targetId, isGroupCall = false, groupMembers = []) => 
     if (localStreamRef.current) {
       localStreamRef.current.getTracks().forEach(track => {
         track.stop();
-        console.log('Stopped track:', track.kind);
+        console.log('⏹️ Stopped track:', track.kind);
       });
       localStreamRef.current = null;
     }
@@ -318,19 +340,23 @@ const useWebRTC = (userId, targetId, isGroupCall = false, groupMembers = []) => 
       cleanupPeerConnection(remoteUserId);
     });
 
-    // Reset state
+    // Reset state immediately (don't wait for timeout)
     setLocalStream(null);
     setRemoteStreams({});
     setIsVideoCallActive(false);
     setIncomingCall(null);
     setCallStatus('');
+    setIsMicOn(true);
+    setIsCameraOn(true);
     activeCallIdRef.current = null;
     isInitiatorRef.current = false;
     pendingCandidatesRef.current = {};
     
+    // Clear cleanup flag after a delay
     setTimeout(() => {
       cleanupInProgressRef.current = false;
-    }, 100);
+      console.log('✅ Cleanup complete, ready for new calls');
+    }, 500);
   }, [isGroupCall, targetId, userId, groupMembers, isVideoCallActive, cleanupPeerConnection]);
 
   // Toggle mic
@@ -371,31 +397,62 @@ const useWebRTC = (userId, targetId, isGroupCall = false, groupMembers = []) => 
     if (!userId) return;
 
     const handleIncomingCall = ({ from, offer, callId, groupId }) => {
-      console.log('Incoming call from:', from);
-      if (!isVideoCallActive && !cleanupInProgressRef.current) {
+      console.log('🔔 Incoming call from:', from, 'Current state - active:', isVideoCallActive, 'cleanup:', cleanupInProgressRef.current);
+      
+      // If cleanup is in progress, wait for it to finish before processing the call
+      if (cleanupInProgressRef.current) {
+        console.log('⏳ Cleanup in progress, delaying incoming call...');
+        setTimeout(() => {
+          if (!isVideoCallActive && !cleanupInProgressRef.current) {
+            console.log('✅ Processing delayed incoming call');
+            setIncomingCall({ from, offer, callId, groupId });
+            setCallStatus('Incoming call...');
+          } else {
+            console.log('❌ Still busy, rejecting call');
+            socket.emit('call-rejected', { to: from, callId, groupId });
+          }
+        }, 600); // Wait slightly longer than cleanup delay
+        return;
+      }
+      
+      if (!isVideoCallActive) {
         setIncomingCall({ from, offer, callId, groupId });
         setCallStatus('Incoming call...');
       } else {
+        console.log('❌ Already in call, rejecting');
         socket.emit('call-rejected', { to: from, callId, groupId });
       }
     };
 
     const handleCallAccepted = async ({ answer, callId, from, groupId }) => {
-      console.log('Call accepted by:', from);
+      console.log('✅ Call accepted by:', from, 'callId:', callId);
       const pc = peerConnectionsRef.current[from];
       
-      if (!pc || pc.signalingState === 'closed') {
-        console.error('Invalid peer connection state');
+      if (!pc) {
+        console.error('❌ No peer connection found for:', from);
+        return;
+      }
+      
+      if (pc.signalingState === 'closed') {
+        console.error('❌ Peer connection is closed for:', from);
         return;
       }
 
+      console.log('📊 Peer connection state:', pc.signalingState);
+
       try {
+        console.log('🔄 Setting remote description from answer');
         await pc.setRemoteDescription(new RTCSessionDescription(answer));
+        
+        console.log('🔄 Processing pending candidates');
         await processPendingCandidates(from);
+        
         setCallStatus('Connected');
+        console.log('✅ Connection established with:', from);
       } catch (error) {
-        console.error('Error handling call accepted:', error);
-        endVideoCall();
+        console.error('❌ Error handling call accepted:', error);
+        setCallStatus('Connection failed');
+        setTimeout(() => endVideoCall(), 2000);
       }
     };
 
@@ -477,9 +534,12 @@ const useWebRTC = (userId, targetId, isGroupCall = false, groupMembers = []) => 
   // Cleanup on unmount
   useEffect(() => {
     return () => {
-      endVideoCall();
+      isUnmountingRef.current = true;
+      if (isVideoCallActive) {
+        endVideoCall();
+      }
     };
-  }, [endVideoCall]);
+  }, []);
 
   return {
     localVideoRef,

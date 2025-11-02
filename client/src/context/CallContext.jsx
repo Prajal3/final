@@ -1,6 +1,6 @@
 import React, { createContext, useContext, useEffect, useState } from 'react';
 import { socket } from '../utils/socket';
-import { Phone, Video, X } from 'lucide-react';
+import { Video, X } from 'lucide-react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 
@@ -14,42 +14,72 @@ export const useCall = () => {
   return context;
 };
 
+// Store pending call in memory instead of sessionStorage
+let pendingCallData = null;
+
+export const getPendingCall = () => {
+  const data = pendingCallData;
+  pendingCallData = null; // Clear after reading
+  return data;
+};
+
 export const CallProvider = ({ children }) => {
   const [incomingCall, setIncomingCall] = useState(null);
   const [isRinging, setIsRinging] = useState(false);
   const navigate = useNavigate();
   const location = useLocation();
+  const processingCallRef = React.useRef(false);
 
   useEffect(() => {
     // Global listener for incoming calls
     const handleIncomingCall = ({ from, offer, callId, groupId }) => {
       console.log('🔔 Global incoming call from:', from, 'groupId:', groupId);
       
-      // Don't show modal if already on the chat/group page for this call
+      // Prevent duplicate call processing
+      if (processingCallRef.current) {
+        console.log('⚠️ Already processing a call, ignoring duplicate');
+        return;
+      }
+      
+      // Check if user is on the chat page for this call
       const currentPath = location.pathname;
       const isOnCallPage = groupId 
         ? currentPath === `/messages/group/${groupId}`
         : currentPath === `/messages/${from}`;
 
+      console.log('📍 Current path:', currentPath, 'isOnCallPage:', isOnCallPage);
+
+      // Only show global modal if NOT on the call page
+      // The ChatBox will handle showing its own modal
       if (!isOnCallPage) {
+        processingCallRef.current = true;
         setIncomingCall({ from, offer, callId, groupId });
         setIsRinging(true);
+        
+        // Clear processing flag after a delay
+        setTimeout(() => {
+          processingCallRef.current = false;
+        }, 1000);
+      } else {
+        console.log('✅ User is on call page, ChatBox will handle the call');
       }
     };
 
     const handleCallRejected = ({ callId }) => {
-      console.log('Call rejected:', callId);
+      console.log('📞 Call rejected:', callId);
       if (incomingCall?.callId === callId) {
         setIncomingCall(null);
         setIsRinging(false);
+        processingCallRef.current = false;
       }
     };
 
     const handleEndCall = ({ callId }) => {
-      console.log('Call ended:', callId);
+      console.log('📴 Call ended:', callId);
       if (incomingCall?.callId === callId) {
         setIncomingCall(null);
         setIsRinging(false);
+        processingCallRef.current = false;
       }
     };
 
@@ -68,14 +98,15 @@ export const CallProvider = ({ children }) => {
     if (incomingCall) {
       const { from, groupId } = incomingCall;
       setIsRinging(false);
+      processingCallRef.current = false;
       
       // Navigate to appropriate chat page with call data
       const targetPath = groupId 
         ? `/messages/group/${groupId}`
         : `/messages/${from}`;
       
-      // Store call data in sessionStorage for the target page
-      sessionStorage.setItem('pendingCall', JSON.stringify(incomingCall));
+      // Store call data in memory for the target page
+      pendingCallData = incomingCall;
       
       navigate(targetPath);
       setIncomingCall(null);
@@ -91,6 +122,7 @@ export const CallProvider = ({ children }) => {
       });
       setIncomingCall(null);
       setIsRinging(false);
+      processingCallRef.current = false;
     }
   };
 

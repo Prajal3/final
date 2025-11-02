@@ -1,12 +1,13 @@
 import { useEffect, useState, useRef } from 'react';
-import { ImageIcon, SendHorizonal, Phone, Video, Mic, MicOff, VideoOff, Maximize2, Minimize2, X, RefreshCw } from 'lucide-react';
+import { ImageIcon, SendHorizonal, Video, Mic, MicOff, VideoOff, Maximize2, Minimize2, X, RefreshCw } from 'lucide-react';
 import useAuth from '../hooks/useAuth';
-import { useLocation, useParams } from 'react-router-dom';
+import { useParams } from 'react-router-dom';
 import API from '../api/api';
 import { socket } from '../utils/socket';
 import useWebRTC from '../hooks/useWebRTC';
 import { motion, AnimatePresence } from 'framer-motion';
 import React, { Component } from 'react';
+import { getPendingCall } from '../context/CallContext';
 
 // ErrorBoundary Component
 class ErrorBoundary extends Component {
@@ -66,8 +67,6 @@ const MessageList = ({ messages, user }) => {
   );
 };
 
-//REmoved Incoming Call Modal Component
-
 // Chat Input Component
 const ChatInput = ({ text, setText, image, setImage, sendMessage }) => (
   <div className="px-4 mb-5">
@@ -113,11 +112,12 @@ const ChatBox = () => {
   const [receiver, setReceiver] = useState(null);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState('');
+  const [showIncomingCallModal, setShowIncomingCallModal] = useState(false);
   const { user } = useAuth();
   const { userId } = useParams();
   const messageEndRef = useRef(null);
+  const hasAcceptedCallRef = useRef(false);
 
-  const location = useLocation();
   // WebRTC hook
   const {
     localVideoRef,
@@ -125,7 +125,6 @@ const ChatBox = () => {
     startVideoCall,
     endVideoCall,
     acceptCall,
-    rejectCall,
     isVideoCallActive,
     callStatus,
     incomingCall,
@@ -139,116 +138,59 @@ const ChatBox = () => {
     remoteStreams,
   } = useWebRTC(user?._id, userId);
 
-  // Debug logs for video call state
+  // Handle incoming call in ChatBox
   useEffect(() => {
-    console.log('isVideoCallActive:', isVideoCallActive);
-    console.log('localVideoRef.current:', localVideoRef.current);
-    console.log('remoteVideoRefs.current:', remoteVideoRefs.current);
-    console.log('localStream:', localStream);
-    console.log('remoteStreams:', remoteStreams);
-  }, [isVideoCallActive, localStream, remoteStreams]);
+    if (incomingCall && incomingCall.from === userId) {
+      console.log('📞 Incoming call modal shown in ChatBox');
+      setShowIncomingCallModal(true);
+    } else {
+      setShowIncomingCallModal(false);
+    }
+  }, [incomingCall, userId]);
 
-  // Function to play video with retry
-  const playVideoWithRetry = (videoRef, maxRetries = 3, delay = 500) => {
-    let attempts = 0;
-    const play = () => {
-      if (!videoRef.current) {
-        console.warn('Video ref not available for play attempt');
-        return;
+  // Check for pending call from global modal - only once
+  useEffect(() => {
+    if (hasAcceptedCallRef.current) return;
+
+    const pendingCall = getPendingCall();
+    if (pendingCall) {
+      console.log('🔔 Found pending call, accepting:', pendingCall);
+      
+      // Only accept if it's for this chat
+      if (pendingCall.from === userId || !pendingCall.groupId) {
+        hasAcceptedCallRef.current = true;
+        // Small delay to ensure component is ready
+        setTimeout(() => {
+          acceptCall(pendingCall);
+        }, 100);
       }
-      videoRef.current
-        .play()
-        .then(() => console.log('Video playing for ref:', videoRef.current))
-        .catch(e => {
-          console.error('Failed to play video:', e);
-          if (attempts < maxRetries) {
-            attempts++;
-            console.warn(`Retry ${attempts} to play video`);
-            setTimeout(play, delay);
-          } else {
-            console.error('Failed to play video after max retries:', e);
-          }
-        });
-    };
-    play();
-  };
-
-  useEffect(() => {
-  if (location.state?.acceptCall && location.state?.incomingCall) {
-    const callData = location.state.incomingCall;
-    console.log('Accepting call from navigation:', callData);
-    acceptCall(callData);
-    // Clear the state to prevent re-accepting on re-render
-    window.history.replaceState({}, document.title);
-  }
-}, [location.state]);
+    }
+  }, [userId, acceptCall]);
 
   // Assign local stream to video element
   useEffect(() => {
     if (localVideoRef.current && localStream) {
-      console.log('Assigning localStream to localVideoRef:', localStream);
+      console.log('📹 Assigning local stream');
       if (localVideoRef.current.srcObject !== localStream) {
         localVideoRef.current.srcObject = localStream;
-        playVideoWithRetry(localVideoRef);
+        localVideoRef.current.play().catch(e => console.error('Local play error:', e));
       }
     }
   }, [localStream]);
 
-  // Assign remote streams to video elements with retry
+  // Assign remote streams to video elements
   useEffect(() => {
-    const assignStreams = () => {
-      Object.entries(remoteStreams).forEach(([remoteUserId, stream]) => {
-        const ref = remoteVideoRefs.current[remoteUserId];
-        if (ref && ref.current && stream) {
-          console.log(`Assigning remoteStream to remoteVideoRef for ${remoteUserId}:`, stream);
-          if (ref.current.srcObject !== stream) {
-            ref.current.srcObject = stream;
-            playVideoWithRetry(ref);
-          }
-        } else {
-          console.warn(`Cannot assign stream for ${remoteUserId}: ref or stream missing`, { ref, stream });
+    Object.entries(remoteStreams).forEach(([remoteUserId, stream]) => {
+      const ref = remoteVideoRefs.current[remoteUserId];
+      if (ref?.current && stream) {
+        console.log(`📹 Assigning remote stream for ${remoteUserId}`);
+        if (ref.current.srcObject !== stream) {
+          ref.current.srcObject = stream;
+          ref.current.play().catch(e => console.error(`Remote play error for ${remoteUserId}:`, e));
         }
-      });
-    };
-
-    // Initial attempt
-    assignStreams();
-
-    // Retry if refs are not yet available
-    const interval = setInterval(() => {
-      if (Object.keys(remoteStreams).length > 0 && Object.values(remoteVideoRefs.current).some(ref => ref.current)) {
-        assignStreams();
-      }
-    }, 500);
-
-    return () => clearInterval(interval);
-  }, [remoteStreams, remoteVideoRefs]);
-
-  // Log when remote video refs are assigned
-  useEffect(() => {
-    Object.entries(remoteVideoRefs.current).forEach(([remoteUserId, ref]) => {
-      if (ref.current) {
-        console.log(`Remote video ref assigned for ${remoteUserId}:`, ref.current);
       }
     });
-  }, [remoteVideoRefs]);
-
-  // Cleanup on unmount
-  useEffect(() => {
-    return () => {
-      if (localVideoRef.current) {
-        localVideoRef.current.srcObject = null;
-        console.log('Cleaned up localVideoRef');
-      }
-      Object.values(remoteVideoRefs.current).forEach(ref => {
-        if (ref.current) {
-          ref.current.srcObject = null;
-          console.log('Cleaned up remoteVideoRef');
-        }
-      });
-      console.log('Cleaned up video refs on unmount');
-    };
-  }, []);
+  }, [remoteStreams, remoteVideoRefs]);
 
   // Fetch receiver data
   const fetchReceiver = async () => {
@@ -346,28 +288,6 @@ const ChatBox = () => {
     fetchMessages();
   }, [userId]);
 
-  useEffect(() => {
-  // Check for pending call from global modal
-  const pendingCallData = sessionStorage.getItem('pendingCall');
-  if (pendingCallData) {
-    try {
-      const callData = JSON.parse(pendingCallData);
-      console.log('Found pending call:', callData);
-      
-      // Clear the stored data
-      sessionStorage.removeItem('pendingCall');
-      
-      // Accept the call
-      if (callData.from === userId || !callData.groupId) {
-        acceptCall(callData);
-      }
-    } catch (error) {
-      console.error('Error processing pending call:', error);
-      sessionStorage.removeItem('pendingCall');
-    }
-  }
-}, [userId, acceptCall]);
-
   if (isLoading) {
     return <div className="flex justify-center items-center h-screen text-gray-600">Loading...</div>;
   }
@@ -389,27 +309,18 @@ const ChatBox = () => {
           alt={receiver.fullname}
           className="size-10 rounded-full"
         />
-        <div>
+        <div className="flex-1">
           <p className="font-semibold text-lg">{receiver.fullname}</p>
           <p className="text-sm text-gray-500">@{receiver.fullname}</p>
-          <div className="flex gap-3 mt-2">
-            <button
-              onClick={() => console.log('Audio call started')}
-              className="p-2 rounded-full bg-green-500 text-white hover:bg-green-600 transition"
-              aria-label="Start audio call"
-            >
-              <Phone size={20} />
-            </button>
-            <button
-              onClick={isVideoCallActive ? endVideoCall : startVideoCall}
-              className="p-2 rounded-full bg-blue-500 text-white hover:bg-blue-600 transition disabled:opacity-50"
-              aria-label={isVideoCallActive ? 'End video call' : 'Start video call'}
-              disabled={incomingCall}
-            >
-              <Video size={20} />
-            </button>
-          </div>
         </div>
+        <button
+          onClick={isVideoCallActive ? endVideoCall : startVideoCall}
+          className="p-2 rounded-full bg-blue-500 text-white hover:bg-blue-600 transition disabled:opacity-50"
+          aria-label={isVideoCallActive ? 'End video call' : 'Start video call'}
+          disabled={callStatus.includes('progress')}
+        >
+          <Video size={20} />
+        </button>
       </div>
 
       {/* Call Status */}
@@ -436,127 +347,154 @@ const ChatBox = () => {
         )}
       </AnimatePresence>
 
-      {/* Incoming Call Modal */}
+      {/* Incoming Call Modal in ChatBox */}
       <AnimatePresence>
-        {incomingCall && (
-          <IncomingCallModal
-            caller={receiver}
-            onAccept={() => acceptCall(incomingCall)}
-            onReject={() => rejectCall(incomingCall.callId)}
-            callId={incomingCall.callId}
-          />
+        {showIncomingCallModal && incomingCall && (
+          <motion.div
+            className="fixed inset-0 bg-black/80 backdrop-blur-md flex items-center justify-center z-[9999] p-4"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+          >
+            <motion.div
+              className="bg-gradient-to-br from-blue-500 to-purple-600 rounded-3xl shadow-2xl p-8 max-w-sm w-full"
+              initial={{ scale: 0.8, y: 50 }}
+              animate={{ scale: 1, y: 0 }}
+              exit={{ scale: 0.8, y: 50 }}
+            >
+              <div className="text-center mb-6">
+                <div className="flex justify-center mb-4">
+                  <motion.div
+                    className="bg-white rounded-full p-6"
+                    animate={{ scale: [1, 1.1, 1] }}
+                    transition={{ duration: 1, repeat: Infinity }}
+                  >
+                    <Video className="w-12 h-12 text-blue-600" />
+                  </motion.div>
+                </div>
+                <h2 className="text-2xl font-bold text-white mb-2">
+                  Incoming Video Call
+                </h2>
+                <p className="text-white/90">
+                  {receiver?.fullname || 'Someone'} is calling you...
+                </p>
+              </div>
+              <div className="flex gap-4 justify-center">
+                <button
+                  onClick={() => {
+                    console.log('❌ Call rejected from ChatBox');
+                    socket.emit('call-rejected', {
+                      to: incomingCall.from,
+                      callId: incomingCall.callId,
+                      groupId: incomingCall.groupId,
+                    });
+                    setShowIncomingCallModal(false);
+                  }}
+                  className="flex items-center gap-2 px-6 py-3 bg-red-500 text-white rounded-full hover:bg-red-600 transition"
+                >
+                  <X size={20} />
+                  Decline
+                </button>
+                <button
+                  onClick={() => {
+                    console.log('✅ Call accepted from ChatBox');
+                    setShowIncomingCallModal(false);
+                    acceptCall(incomingCall);
+                  }}
+                  className="flex items-center gap-2 px-6 py-3 bg-green-500 text-white rounded-full hover:bg-green-600 transition"
+                >
+                  <Video size={20} />
+                  Accept
+                </button>
+              </div>
+            </motion.div>
+          </motion.div>
         )}
       </AnimatePresence>
 
-      {/* Local Video Element (Always Mounted) */}
-      <video
-  ref={localVideoRef}
-  autoPlay
-  muted
-  playsInline
-  className={isVideoCallActive ? "w-full md:w-64 rounded-lg shadow" : "hidden"}
-  onLoadedMetadata={() => {
-    console.log('Local video metadata loaded');
-    localVideoRef.current?.play().catch(e => console.error('Local play error:', e));
-  }}
-/>
-
-
       {/* Video Call UI */}
       <AnimatePresence>
-        {isVideoCallActive && localStream && (
+        {isVideoCallActive && (
           <ErrorBoundary>
             <motion.div
               id="video-call-container"
-              className={`p-5 flex flex-col md:flex-row gap-4 justify-center bg-gray-100 rounded-lg shadow-lg ${
+              className={`p-5 flex flex-col md:flex-row gap-4 justify-center bg-gradient-to-br from-gray-900 to-gray-800 rounded-lg shadow-lg ${
                 isFullScreen ? 'fixed inset-0 z-50' : 'relative z-10'
               }`}
               initial={{ opacity: 0, scale: 0.9 }}
               animate={{ opacity: 1, scale: 1 }}
               exit={{ opacity: 0, scale: 0.9 }}
               transition={{ duration: 0.3 }}
-              onAnimationStart={() => console.log('Video call container rendered')}
             >
+              {/* Local Video */}
               <div className="relative">
-                <h3 className="text-sm font-medium mb-2">You</h3>
-                <video
-                  ref={localVideoRef}
-                  autoPlay
-                  muted
-                  playsInline
-                  className="w-full md:w-64 rounded-lg shadow"
-                  onError={(e) => console.error('Local video error:', e)}
-                  onCanPlay={() => console.log('Local video can play')}
-                />
-                {!localStream && (
-                  <div className="absolute inset-0 bg-gray-800 flex items-center justify-center rounded-lg">
-                    <span className="text-white">No local video</span>
-                  </div>
-                )}
-                {localStream && localStream.getVideoTracks().length === 0 && (
-                  <div className="absolute inset-0 bg-gray-800 flex items-center justify-center rounded-lg">
-                    <VideoOff className="text-white" size={32} />
-                  </div>
-                )}
+                <h3 className="text-sm font-medium mb-2 text-white">You</h3>
+                <div className="relative w-full md:w-64 h-48 md:h-auto rounded-lg overflow-hidden bg-gray-800">
+                  <video
+                    ref={localVideoRef}
+                    autoPlay
+                    muted
+                    playsInline
+                    className="w-full h-full object-cover rounded-lg shadow-xl"
+                  />
+                  {!isCameraOn && (
+                    <div className="absolute inset-0 bg-gray-800 flex items-center justify-center">
+                      <VideoOff className="text-white" size={32} />
+                    </div>
+                  )}
+                </div>
               </div>
-              {Object.entries(remoteStreams).map(([remoteUserId, stream]) => (
-  <div key={remoteUserId} className="relative">
-    <h3 className="text-sm font-medium mb-2 text-white">
-      {remoteUserId.substring(0, 8)}...
-    </h3>
-    <video
-      ref={(el) => {
-        if (el && remoteVideoRefs.current[remoteUserId]) {
-          remoteVideoRefs.current[remoteUserId].current = el;
-          if (stream && el.srcObject !== stream) {
-            el.srcObject = stream;
-            el.play().catch(e => console.error('Remote play error:', e));
-          }
-        }
-      }}
-      autoPlay
-      playsInline
-      className="w-full md:w-64 rounded-lg shadow"
-      onLoadedMetadata={(e) => {
-        console.log(`Remote video metadata loaded for ${remoteUserId}`);
-        e.target.play().catch(err => console.error('Play error:', err));
-      }}
-    />
-    {(!stream || stream.getTracks().length === 0) && (
-      <div className="absolute inset-0 bg-gray-800 flex items-center justify-center rounded-lg">
-        <span className="text-white text-sm">Connecting...</span>
-      </div>
-    )}
-  </div>
-))}
-              <div className="flex gap-2 mt-4 justify-center">
+
+              {/* Remote Videos */}
+              {Object.entries(remoteStreams).map(([remoteUserId]) => (
+                <div key={remoteUserId} className="relative">
+                  <h3 className="text-sm font-medium mb-2 text-white">
+                    {remoteUserId === userId ? receiver.fullname : remoteUserId.substring(0, 8) + '...'}
+                  </h3>
+                  <div className="relative w-full md:w-64 h-48 md:h-auto rounded-lg overflow-hidden bg-gray-800">
+                    <video
+                      ref={(el) => {
+                        if (el && remoteVideoRefs.current[remoteUserId]) {
+                          remoteVideoRefs.current[remoteUserId].current = el;
+                        }
+                      }}
+                      autoPlay
+                      playsInline
+                      className="w-full h-full object-cover rounded-lg shadow-xl"
+                    />
+                  </div>
+                </div>
+              ))}
+
+              {/* Control Buttons */}
+              <div className="absolute bottom-5 left-1/2 transform -translate-x-1/2 flex gap-3">
                 <button
                   onClick={toggleMic}
-                  className={`p-2 rounded-full ${isMicOn ? 'bg-green-500' : 'bg-red-500'} text-white hover:opacity-80 transition`}
+                  className={`p-3 rounded-full ${isMicOn ? 'bg-gray-700' : 'bg-red-500'} text-white hover:opacity-80 transition shadow-lg`}
                   aria-label={isMicOn ? 'Mute microphone' : 'Unmute microphone'}
                 >
-                  {isMicOn ? <Mic size={18} /> : <MicOff size={18} />}
+                  {isMicOn ? <Mic size={20} /> : <MicOff size={20} />}
                 </button>
                 <button
                   onClick={toggleCamera}
-                  className={`p-2 rounded-full ${isCameraOn ? 'bg-green-500' : 'bg-red-500'} text-white hover:opacity-80 transition`}
+                  className={`p-3 rounded-full ${isCameraOn ? 'bg-gray-700' : 'bg-red-500'} text-white hover:opacity-80 transition shadow-lg`}
                   aria-label={isCameraOn ? 'Turn off camera' : 'Turn on camera'}
                 >
-                  {isCameraOn ? <Video size={18} /> : <VideoOff size={18} />}
+                  {isCameraOn ? <Video size={20} /> : <VideoOff size={20} />}
                 </button>
                 <button
                   onClick={toggleFullScreen}
-                  className="p-2 rounded-full bg-blue-500 text-white hover:bg-blue-600 transition"
+                  className="p-3 rounded-full bg-gray-700 text-white hover:bg-gray-600 transition shadow-lg"
                   aria-label={isFullScreen ? 'Exit full screen' : 'Enter full screen'}
                 >
-                  {isFullScreen ? <Minimize2 size={18} /> : <Maximize2 size={18} />}
+                  {isFullScreen ? <Minimize2 size={20} /> : <Maximize2 size={20} />}
                 </button>
                 <button
                   onClick={endVideoCall}
-                  className="p-2 rounded-full bg-red-500 text-white hover:bg-red-600 transition"
+                  className="p-3 rounded-full bg-red-500 text-white hover:bg-red-600 transition shadow-lg"
                   aria-label="End call"
                 >
-                  <X size={18} />
+                  <X size={20} />
                 </button>
               </div>
             </motion.div>
