@@ -145,14 +145,33 @@ export const getSinglePost = async (req, res) => {
 
 // ------------------------- GET MY POSTS ------------------------- 
 export const getMyPosts = async (req, res) => {
-    try {
-        const currentUserId = req.user._id;
-        const posts = await Post.find({ userId: currentUserId }).populate("userId", "fullname username profilePics").sort({ createdAt: -1 });
-        res.status(200).json({ posts });
-    } catch (err) {
-        console.error("Get my posts error:", err);
-        res.status(500).json({ message: "Internal server error" });
-    }
+  try {
+    const currentUserId = req.user._id;
+
+    // Get current user's following list
+    const currentUser = await User.findById(currentUserId).select("following");
+    const followingIds = currentUser.following || [];
+
+    // Include current user's own ID to show their posts at the top as well
+    const topPostsUserIds = [currentUserId, ...followingIds];
+
+    // Fetch posts by followed users and current user
+    const topPosts = await Post.find({ userId: { $in: topPostsUserIds } })
+      .populate("userId", "fullname username profilePics")
+      .sort({ createdAt: -1 });
+
+    // Fetch posts by other users
+    const otherPosts = await Post.find({ userId: { $nin: topPostsUserIds } })
+      .populate("userId", "fullname username profilePics")
+      .sort({ createdAt: -1 });
+
+    const posts = [...topPosts, ...otherPosts];
+
+    res.status(200).json({ success: true, posts });
+  } catch (err) {
+    console.error("Get my posts error:", err);
+    res.status(500).json({ success: false, message: "Internal server error" });
+  }
 };
 
 // ------------------------- SHARE POST -------------------------

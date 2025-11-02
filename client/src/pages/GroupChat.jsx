@@ -3,7 +3,7 @@ import { ImageIcon, SendHorizonal, Phone, Video, Mic, MicOff, VideoOff, Maximize
 import useAuth from '../hooks/useAuth';
 import { useParams } from 'react-router-dom';
 import API from '../api/api';
-import { socket, connectSocket } from '../utils/socket';
+import { socket } from '../utils/socket';
 import useWebRTC from '../hooks/useWebRTC';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Search } from 'lucide-react';
@@ -13,9 +13,9 @@ const MessageList = ({ messages, user }) => {
   return (
     <div className="space-y-3 max-w-3xl mx-auto px-4">
       <AnimatePresence>
-        {messages.map((message, index) => (
+        {messages.map((message) => (
           <motion.div
-            key={message._id || index}
+            key={message._id}
             className={`flex ${
               message.sender._id === user._id ? 'justify-end' : 'justify-start'
             } items-end gap-2 my-2`}
@@ -132,7 +132,7 @@ const VideoCallUI = ({
         )}
       </div>
       {groupMembers
-        .filter((member) => member._id !== userId)
+        .filter((member) => member._id !== localStream?.id)
         .map((member) => (
           <div key={member._id} className="relative">
             <h3 className="text-sm font-medium mb-2 text-gray-800">{member.fullname}</h3>
@@ -578,30 +578,25 @@ const GroupChat = () => {
   const sendMessage = async () => {
     if (!text && !image) return;
     setIsSending(true);
-     const tempMessage = {
-      _id: `temp-${Date.now()}`,
-      sender: { 
-        _id: user._id, 
-        fullname: user.fullname,
-        profilePics: user.profilePics 
-      },
+    const tempMessage = {
+      _id: Date.now(),
+      sender: { _id: user._id, fullname: user.fullname },
       group: groupId,
       text,
       message_type: image ? 'image' : 'text',
       media_url: image ? URL.createObjectURL(image) : null,
       createdAt: new Date().toISOString(),
     };
-    setMessages((prev) => [...prev, tempMessage]);
-     const textToSend = text;
-    const imageToSend = image;
+    // setMessages((prev) => [...prev, tempMessage]);
     setText('');
     setImage(null);
- const formData = new FormData();
+
+    const formData = new FormData();
     formData.append('sender', user._id);
-    formData.append('text', textToSend);
-    formData.append('message_type', imageToSend ? 'image' : 'text');
-    if (imageToSend) {
-      formData.append('image', imageToSend);
+    formData.append('text', text);
+    formData.append('message_type', image ? 'image' : 'text');
+    if (image) {
+      formData.append('image', image);
     }
 
     try {
@@ -609,30 +604,11 @@ const GroupChat = () => {
         withCredentials: true,
         headers: { 'Content-Type': 'multipart/form-data' },
       });
-      setMessages((prev) => 
-        prev.map((msg) => (msg._id === tempMessage._id ? res.data : msg))
-      );
-      
-      // Emit to socket for real-time delivery to other users
-      socket.emit('send-group-message', {
-        groupId,
-        message: res.data,
-        senderId: user._id,
-        senderName: user.fullname,
-      });
-      
-      console.log(' Message sent and emitted to group');
-
-
       setMessages((prev) => prev.map((msg) => (msg._id === tempMessage._id ? res.data : msg)));
     } catch (error) {
-      console.error(' Failed to send message:', error);
-      setError('Failed to send message.');
-      // Remove temp message on failure
+      setError('Failed to send group message.');
       setMessages((prev) => prev.filter((msg) => msg._id !== tempMessage._id));
-      // Restore input values
-      setText(textToSend);
-      setImage(imageToSend);
+      console.error(error);
     } finally {
       setIsSending(false);
     }
@@ -692,82 +668,34 @@ const addMember = async (userIds) => {
   };
 
   // Socket.IO handling
-   useEffect(() => {
-    if (!user?._id || !groupId) return;
-
-    console.log(' Setting up socket for group:', groupId);
-    
-    // Connect socket (uses singleton pattern, won't duplicate)
-    connectSocket(user._id);
-
-    // Join the group room
-    socket.emit('join-group', groupId);
-    console.log(' Joined group room:', groupId);
-
-    // Handle incoming group messages
-    const handleReceiveMessage = (data) => {
-      console.log(' Received group message:', data);
-      
-      // Only process if it's for this group and not from current user
-      if (data.groupId === groupId && data.senderId !== user._id) {
-        setMessages((prev) => {
-          // Check for duplicates by message ID
-          const exists = prev.some(msg => msg._id === data.message._id);
-          if (exists) {
-            console.log(' Duplicate message detected, skipping');
-            return prev;
-          }
-          
-          // Add new message and sort by timestamp
-          const updated = [...prev, data.message].sort(
-            (a, b) => new Date(a.createdAt) - new Date(b.createdAt)
-          );
-          console.log('Message added to UI');
-          return updated;
-        });
-      }
-    };
-
-    // Handle group updates (member added/removed)
-    const handleGroupUpdated = ({ groupId: updatedGroupId, action, memberId }) => {
-      if (updatedGroupId === groupId) {
-        console.log(` Group updated - Action: ${action}`);
-        fetchGroup(); // Refresh group data
-        
-        // If current user was removed, redirect to groups page
-        if (action === 'remove' && memberId === user._id) {
-          console.log(' You were removed from the group');
-          window.location.href = '/groups';
+  useEffect(() => {
+    if (user && groupId) {
+      socket.connect();
+      socket.emit('register', user._id);
+      socket.emit('join-group', groupId);
+      socket.on('receive-message', (message) => {
+        console.log(message)
+        if (message.group === groupId) {
+          setMessages((prev) => [...prev, message].sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt)));
         }
-      }
-    };
-
-    // Register event listeners
-    socket.on('receive-group-message', handleReceiveMessage);
-    socket.on('group-updated', handleGroupUpdated);
-
-    // Cleanup function
-    return () => {
-      console.log('🚪 Cleaning up group chat listeners');
-      socket.emit('leave-group', groupId);
-      socket.off('receive-group-message', handleReceiveMessage);
-      socket.off('group-updated', handleGroupUpdated);
-      // DON'T disconnect socket - it's shared across the app
-    };
-  }, [user?._id, groupId]);
-
-  // Auto-scroll to latest message
-  useEffect(() => {
-    messageEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages]);
-
-  // Fetch initial data on mount
-  useEffect(() => {
-    if (groupId) {
-      fetchGroup();
-      fetchMessages();
+        }
+      );
+      socket.on('group-updated', ({ groupId: updatedGroupId, action, member, memberId }) => {
+        if (updatedGroupId === groupId) {
+          fetchGroup(); // Refresh group data
+          if (action === 'remove' && memberId === user._id) {
+            window.location.href = '/groups'; // Redirect if user is kicked
+          }
+        }
+      });
+      return () => {
+        socket.off('receive-group-message');
+        socket.off('group-updated');
+        socket.emit('leave-group', groupId);
+        socket.disconnect();
+      };
     }
-  }, [groupId]);
+  }, [user, groupId]);
 
   // Scroll to latest message
   useEffect(() => {
@@ -922,17 +850,9 @@ const addMember = async (userIds) => {
       </div>
 
       {/* Chat Input */}
-     <ChatInput 
-        text={text} 
-        setText={setText} 
-        image={image} 
-        setImage={setImage} 
-        sendMessage={sendMessage} 
-        isSending={isSending} 
-      />
+      <ChatInput text={text} setText={setText} image={image} setImage={setImage} sendMessage={sendMessage} isSending={isSending} />
     </div>
-
   );
-};  
+};
 
 export default GroupChat;
