@@ -1,7 +1,6 @@
 'use client';
 
 import { useState, useEffect, useMemo, useDeferredValue } from 'react';
-import { useNavigate } from 'react-router-dom';
 import { Search, Users, Globe, Loader2, X } from 'lucide-react';
 import UserCard from '../components/UserCard';
 import Loading from '../components/Loading';
@@ -25,7 +24,6 @@ export default function Discover() {
   const [input, setInput] = useState('');
   const [users, setUsers] = useState([]);
   const [initialLoading, setInitialLoading] = useState(true);
-  const navigate = useNavigate();
 
   // ---------- FETCH ----------
   useEffect(() => {
@@ -56,11 +54,6 @@ export default function Discover() {
       return n.includes(searchTerm) || uName.includes(searchTerm) || b.includes(searchTerm) || l.includes(searchTerm);
     });
   }, [users, searchTerm]);
-
-  // ---------- NAVIGATION ----------
-  const handleUserClick = (userId) => {
-    navigate(`/profile/${userId}`);
-  };
 
   // ---------- UI ----------
   return (
@@ -123,9 +116,8 @@ export default function Discover() {
             {filteredUsers.map((user, idx) => (
               <div
                 key={user._id}
-                className="animate-fadeInUp cursor-pointer"
+                className="animate-fadeInUp"
                 style={{ animationDelay: `${idx * 50}ms` }}
-                onClick={() => handleUserClick(user._id)}
               >
                 <div className="transform transition-all duration-300 hover:scale-[1.02] hover:shadow-xl rounded-xl overflow-hidden">
                   <UserCard user={user} />

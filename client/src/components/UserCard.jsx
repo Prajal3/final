@@ -1,23 +1,37 @@
 import { MapPin, MessageCircle, Plus, UserPlus } from 'lucide-react'
+import { useNavigate } from 'react-router-dom'
 import useAuth from '../hooks/useAuth'
 import API from '../api/api'
+
 const UserCard = ({user}) => {
   console.log(user)
   const {user: currentUser} = useAuth()
-  // console.log(currentUser.following)
+  const navigate = useNavigate()
+  
   const handleFollow = async (userId) => {
     const res = await API.put(`/users/${userId}/follow`, {}, {withCredentials: true})
     console.log(res.data)
   }
+  
   const handleConnectionRequest = async (userId) => {
     const res = await API.post(`/users/${userId}/sendrequest`, {}, {withCredentials: true})
     console.log(res.data)
   }
 
+  const handleProfileClick = (e) => {
+    e.stopPropagation()
+    navigate(`/profile/${user._id}`)
+  }
+
   return (
     <div key={user._id} className='p-4 pt-6 flex flex-col justify-between w-72 shadow border border-gray-200 rounded-md'>
       <div className='text-center'>
-        <img src={user.profilePics || "https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?q=80&w=200"} alt="" className='rounded-full w-16 shadow-md mx-auto' />
+        <img 
+          src={user.profilePics || "https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?q=80&w=200"} 
+          alt="" 
+          className='rounded-full w-16 shadow-md mx-auto cursor-pointer hover:opacity-80 transition-opacity' 
+          onClick={handleProfileClick}
+        />
         <p className='mt-4 font-semibold'>{user.fullname}</p>
         {user.username && <p className='text-gray-500 font-light'>@{user.username}</p>}
         {user.bio && <p className='text-gray-600 mt-2 text-center text-sm px-4'>{user.bio}</p>}
