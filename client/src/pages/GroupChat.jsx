@@ -3,10 +3,11 @@ import { ImageIcon, SendHorizonal, Phone, Video, Mic, MicOff, VideoOff, Maximize
 import useAuth from '../hooks/useAuth';
 import { useParams } from 'react-router-dom';
 import API from '../api/api';
-import { socket, connectSocket } from '../utils/socket';
+import { socket } from '../utils/socket';
 import useWebRTC from '../hooks/useWebRTC';
 import { motion, AnimatePresence } from 'framer-motion';
-
+import { Search } from 'lucide-react';
+import toast from 'react-hot-toast';
 // Message List Component
 const MessageList = ({ messages, user }) => {
   return (
@@ -23,6 +24,7 @@ const MessageList = ({ messages, user }) => {
             exit={{ opacity: 0, y: -10 }}
             transition={{ duration: 0.2 }}
           >
+            {/* Avatar on LEFT for others */}
             {message.sender._id !== user._id && (
               <img
                 src={
@@ -34,6 +36,7 @@ const MessageList = ({ messages, user }) => {
               />
             )}
 
+            {/* Message Bubble */}
             <div
               className={`flex flex-col max-w-[70%] rounded-2xl p-3 shadow-md transition-all duration-200 hover:shadow-lg ${
                 message.sender._id === user._id
@@ -65,6 +68,7 @@ const MessageList = ({ messages, user }) => {
               </span>
             </div>
 
+            {/* Avatar on RIGHT for current user */}
             {message.sender._id === user._id && (
               <img
                 src={
@@ -96,7 +100,6 @@ const VideoCallUI = ({
   localStream,
   remoteStreams,
   groupMembers,
-  userId,
 }) => {
   return (
     <motion.div
@@ -223,24 +226,76 @@ const IncomingCallModal = ({ caller, onAccept, onReject, callId }) => (
 );
 
 // Group Details Modal Component
+// import { useEffect, useState } from 'react';
+// import { motion } from 'framer-motion';
+// import API from '../api/api';
+// import { socket } from '../utils/socket';
+// import { toast } from 'react-toastify'; // Assuming react-toastify for notifications
+
 const GroupDetailsModal = ({ group, onClose, user, onLeaveGroup, onAddMember, onKickMember }) => {
-  const [newMemberEmail, setNewMemberEmail] = useState('');
-  const [error, setError] = useState('');
+  const [connections, setConnections] = useState([]);
+  const [filteredConnections, setFilteredConnections] = useState([]);
+  const [search, setSearch] = useState('');
+  const [selected, setSelected] = useState([]);
   const [isAdding, setIsAdding] = useState(false);
+  const [error, setError] = useState('');
   const isAdmin = group.admins.some((admin) => admin._id === user._id);
 
+  // Fetch connections
+  const getConnections = async () => {
+    try {
+      const { data } = await API.get(`/users/${user._id}/getconnections`, { withCredentials: true });
+      // Filter out existing group members
+      const filtered = data.filter((conn) => !group.members.some((m) => m._id === conn._id));
+      setConnections(filtered);
+      setFilteredConnections(filtered);
+    } catch (error) {
+      setError('Failed to load connections.');
+      console.error(error);
+    }
+  };
+
+  // Fetch connections when modal opens
+  useEffect(() => {
+    if (isAdmin) {
+      getConnections();
+    }
+  }, [user._id, group.members]);
+
+  // Handle search
+  useEffect(() => {
+    const filtered = connections.filter(
+      (conn) =>
+        conn.fullname.toLowerCase().includes(search.toLowerCase()) ||
+        conn.username.toLowerCase().includes(search.toLowerCase())
+    );
+    setFilteredConnections(filtered);
+  }, [search, connections]);
+
+  // Toggle selection
+  const handleToggle = (userId) => {
+    setSelected((prev) =>
+      prev.includes(userId) ? prev.filter((id) => id !== userId) : [...prev, userId]
+    );
+  };
+
+  // Add selected members
   const handleAddMember = async () => {
-    if (!newMemberEmail) {
-      setError('Please enter an email.');
+    if (selected.length === 0) {
+      setError('Please select at least one member.');
       return;
     }
     setIsAdding(true);
     try {
-      await onAddMember(newMemberEmail);
-      setNewMemberEmail('');
+      await onAddMember(selected);
+      setSelected([]);
+      setSearch('');
       setError('');
+      toast.success(`${selected.length} member(s) added successfully!`);
     } catch (err) {
-      setError('Failed to add member.');
+      console.log(err)
+      setError(err.message || 'Failed to add members.');
+      toast.error(err.message || 'Failed to add members.');
     } finally {
       setIsAdding(false);
     }
@@ -286,26 +341,64 @@ const GroupDetailsModal = ({ group, onClose, user, onLeaveGroup, onAddMember, on
           </div>
           {isAdmin && (
             <div>
-              <h3 className="text-sm font-medium text-gray-700 mb-2">Add Member</h3>
-              <div className="flex gap-2">
+              <h3 className="text-sm font-medium text-gray-700 mb-2">Add Members</h3>
+              <div className="relative mb-3">
+                <Search className="absolute left-3 top-2.5 text-gray-400 w-4 h-4" />
                 <input
-                  type="email"
-                  value={newMemberEmail}
-                  onChange={(e) => setNewMemberEmail(e.target.value)}
-                  placeholder="Enter email"
-                  className="flex-1 p-2 border border-gray-200 rounded-lg text-sm outline-none focus:border-blue-500"
+                  type="text"
+                  placeholder="Search connections..."
+                  value={search}
+                  onChange={(e) => setSearch(e.target.value)}
+                  className="pl-9 w-full py-2 rounded-lg border border-gray-200 text-sm outline-none focus:border-blue-500"
                   disabled={isAdding}
                 />
-                <button
-                  onClick={handleAddMember}
-                  className={`p-2 rounded-lg bg-blue-600 text-white hover:bg-blue-700 transition-all duration-200 ${
-                    isAdding ? 'opacity-50 cursor-not-allowed' : ''
-                  }`}
-                  disabled={isAdding}
-                >
-                  {isAdding ? 'Adding...' : 'Add'}
-                </button>
               </div>
+              <div className="max-h-48 overflow-y-auto border border-gray-200 rounded-lg p-3 bg-gray-50">
+                {filteredConnections.length === 0 && (
+                  <p className="text-sm text-gray-500 text-center">No connections available.</p>
+                )}
+                {filteredConnections.map((user) => (
+                  <div
+                    key={user._id}
+                    onClick={() => !isAdding && handleToggle(user._id)}
+                    className={`flex items-center justify-between p-2 rounded-lg cursor-pointer ${
+                      selected.includes(user._id)
+                        ? 'bg-blue-100'
+                        : 'hover:bg-gray-100'
+                    } transition-all duration-200`}
+                  >
+                    <div className="flex items-center gap-3">
+                      <img
+                        src={
+                          user.profilePics ||
+                          'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?q=80&w=200'
+                        }
+                        alt={user.fullname}
+                        className="w-10 h-10 rounded-full"
+                      />
+                      <div>
+                        <p className="text-sm font-medium text-gray-700">{user.fullname}</p>
+                        <p className="text-xs text-gray-500">{user.email}</p>
+                      </div>
+                    </div>
+                    <input
+                      type="checkbox"
+                      checked={selected.includes(user._id)}
+                      readOnly
+                      className="accent-blue-500"
+                    />
+                  </div>
+                ))}
+              </div>
+              <button
+                onClick={handleAddMember}
+                className={`w-full mt-3 p-2 rounded-lg bg-blue-600 text-white hover:bg-blue-700 transition-all duration-200 ${
+                  isAdding || selected.length === 0 ? 'opacity-50 cursor-not-allowed' : ''
+                }`}
+                disabled={isAdding || selected.length === 0}
+              >
+                {isAdding ? 'Adding...' : `Add ${selected.length} Member${selected.length > 1 ? 's' : ''}`}
+              </button>
               {error && <p className="text-red-500 text-xs mt-1">{error}</p>}
             </div>
           )}
@@ -319,7 +412,10 @@ const GroupDetailsModal = ({ group, onClose, user, onLeaveGroup, onAddMember, on
                 >
                   <div className="flex items-center gap-3">
                     <img
-                      src={member.profilePics || 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?q=80&w=200'}
+                      src={
+                        member.profilePics ||
+                        'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?q=80&w=200'
+                      }
                       alt={member.fullname}
                       className="w-10 h-10 rounded-full"
                     />
@@ -482,36 +578,25 @@ const GroupChat = () => {
   const sendMessage = async () => {
     if (!text && !image) return;
     setIsSending(true);
-    
     const tempMessage = {
-      _id: `temp-${Date.now()}`,
-      sender: { 
-        _id: user._id, 
-        fullname: user.fullname,
-        profilePics: user.profilePics 
-      },
+      _id: Date.now(),
+      sender: { _id: user._id, fullname: user.fullname },
       group: groupId,
       text,
       message_type: image ? 'image' : 'text',
       media_url: image ? URL.createObjectURL(image) : null,
       createdAt: new Date().toISOString(),
     };
-    
-    // Optimistically add message to UI
     setMessages((prev) => [...prev, tempMessage]);
-    
-    // Clear input immediately for better UX
-    const textToSend = text;
-    const imageToSend = image;
     setText('');
     setImage(null);
 
     const formData = new FormData();
     formData.append('sender', user._id);
-    formData.append('text', textToSend);
-    formData.append('message_type', imageToSend ? 'image' : 'text');
-    if (imageToSend) {
-      formData.append('image', imageToSend);
+    formData.append('text', text);
+    formData.append('message_type', image ? 'image' : 'text');
+    if (image) {
+      formData.append('image', image);
     }
 
     try {
@@ -519,30 +604,11 @@ const GroupChat = () => {
         withCredentials: true,
         headers: { 'Content-Type': 'multipart/form-data' },
       });
-      
-      // Replace temp message with real message from server
-      setMessages((prev) => 
-        prev.map((msg) => (msg._id === tempMessage._id ? res.data : msg))
-      );
-      
-      // Emit to socket for real-time delivery to other users
-      socket.emit('send-group-message', {
-        groupId,
-        message: res.data,
-        senderId: user._id,
-        senderName: user.fullname,
-      });
-      
-      console.log('✅ Message sent and emitted to group');
-      
+      setMessages((prev) => prev.map((msg) => (msg._id === tempMessage._id ? res.data : msg)));
     } catch (error) {
-      console.error('❌ Failed to send message:', error);
-      setError('Failed to send message.');
-      // Remove temp message on failure
+      setError('Failed to send group message.');
       setMessages((prev) => prev.filter((msg) => msg._id !== tempMessage._id));
-      // Restore input values
-      setText(textToSend);
-      setImage(imageToSend);
+      console.error(error);
     } finally {
       setIsSending(false);
     }
@@ -553,7 +619,8 @@ const GroupChat = () => {
     try {
       await API.post(`/group/groups/${groupId}/leave`, {}, { withCredentials: true });
       socket.emit('leave-group', groupId);
-      window.location.href = '/groups';
+      // Redirect to another page (e.g., groups list) or clear group state
+      window.location.href = '/groups'; // Adjust as needed
     } catch (error) {
       setError('Failed to leave group.');
       console.error(error);
@@ -561,19 +628,28 @@ const GroupChat = () => {
   };
 
   // Add member
-  const addMember = async (email) => {
-    try {
-      const res = await API.post(
-        `/group/add-member/${groupId}`,
-        { email },
-        { withCredentials: true }
-      );
-      setGroup(res.data.group);
-      socket.emit('group-updated', { groupId, action: 'add', member: res.data.newMember });
-    } catch (error) {
-      throw new Error('Failed to add member.');
-    }
-  };
+// In GroupChat component
+const addMember = async (userIds) => {
+  try {
+    const res = await API.post(
+      `/group/groups/${groupId}/invite`,
+      { userIds },
+      { withCredentials: true }
+    );
+    setGroup(res.data.group);
+    console.log(res.data.group);
+    userIds.forEach((userId) => {
+      socket.emit('group-updated', {
+        groupId,
+        action: 'add',
+        member: res.data.group.members.find((m) => m._id === userId),
+      });
+    });
+  } catch (error) {
+    console.log(error)
+    throw new Error(error.response?.data?.message || 'Failed to add members');
+  }
+};
 
   // Kick member
   const kickMember = async (memberId) => {
@@ -591,82 +667,42 @@ const GroupChat = () => {
     }
   };
 
-  // Socket.IO Setup - Fixed for real-time group chat
+  // Socket.IO handling
   useEffect(() => {
-    if (!user?._id || !groupId) return;
-
-    console.log('🔌 Setting up socket for group:', groupId);
-    
-    // Connect socket (uses singleton pattern, won't duplicate)
-    connectSocket(user._id);
-
-    // Join the group room
-    socket.emit('join-group', groupId);
-    console.log('✅ Joined group room:', groupId);
-
-    // Handle incoming group messages
-    const handleReceiveMessage = (data) => {
-      console.log('📩 Received group message:', data);
-      
-      // Only process if it's for this group and not from current user
-      if (data.groupId === groupId && data.senderId !== user._id) {
-        setMessages((prev) => {
-          // Check for duplicates by message ID
-          const exists = prev.some(msg => msg._id === data.message._id);
-          if (exists) {
-            console.log('⚠️ Duplicate message detected, skipping');
-            return prev;
-          }
-          
-          // Add new message and sort by timestamp
-          const updated = [...prev, data.message].sort(
-            (a, b) => new Date(a.createdAt) - new Date(b.createdAt)
-          );
-          console.log('✅ Message added to UI');
-          return updated;
-        });
-      }
-    };
-
-    // Handle group updates (member added/removed)
-    const handleGroupUpdated = ({ groupId: updatedGroupId, action, memberId }) => {
-      if (updatedGroupId === groupId) {
-        console.log(`🔄 Group updated - Action: ${action}`);
-        fetchGroup(); // Refresh group data
-        
-        // If current user was removed, redirect to groups page
-        if (action === 'remove' && memberId === user._id) {
-          console.log('⚠️ You were removed from the group');
-          window.location.href = '/groups';
+    if (user && groupId) {
+      socket.connect();
+      socket.emit('join-group', groupId);
+      socket.on('receive-group-message', (message) => {
+        if (message.group === groupId) {
+          setMessages((prev) => [...prev, message].sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt)));
         }
-      }
-    };
+      });
+      socket.on('group-updated', ({ groupId: updatedGroupId, action, member, memberId }) => {
+        if (updatedGroupId === groupId) {
+          fetchGroup(); // Refresh group data
+          if (action === 'remove' && memberId === user._id) {
+            window.location.href = '/groups'; // Redirect if user is kicked
+          }
+        }
+      });
+      return () => {
+        socket.off('receive-group-message');
+        socket.off('group-updated');
+        socket.emit('leave-group', groupId);
+        socket.disconnect();
+      };
+    }
+  }, [user, groupId]);
 
-    // Register event listeners
-    socket.on('receive-group-message', handleReceiveMessage);
-    socket.on('group-updated', handleGroupUpdated);
-
-    // Cleanup function
-    return () => {
-      console.log('🚪 Cleaning up group chat listeners');
-      socket.emit('leave-group', groupId);
-      socket.off('receive-group-message', handleReceiveMessage);
-      socket.off('group-updated', handleGroupUpdated);
-      // DON'T disconnect socket - it's shared across the app
-    };
-  }, [user?._id, groupId]);
-
-  // Auto-scroll to latest message
+  // Scroll to latest message
   useEffect(() => {
     messageEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
 
-  // Fetch initial data on mount
+  // Fetch initial data
   useEffect(() => {
-    if (groupId) {
-      fetchGroup();
-      fetchMessages();
-    }
+    fetchGroup();
+    fetchMessages();
   }, [groupId]);
 
   if (isLoading) {
@@ -801,7 +837,6 @@ const GroupChat = () => {
           localStream={localStream}
           remoteStreams={remoteStreams}
           groupMembers={group.members}
-          userId={user._id}
         />
       )}
 
@@ -812,14 +847,7 @@ const GroupChat = () => {
       </div>
 
       {/* Chat Input */}
-      <ChatInput 
-        text={text} 
-        setText={setText} 
-        image={image} 
-        setImage={setImage} 
-        sendMessage={sendMessage} 
-        isSending={isSending} 
-      />
+      <ChatInput text={text} setText={setText} image={image} setImage={setImage} sendMessage={sendMessage} isSending={isSending} />
     </div>
   );
 };
