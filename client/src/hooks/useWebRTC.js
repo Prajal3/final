@@ -240,7 +240,6 @@ const useWebRTC = (userId, targetId, isGroupCall = false, groupMembers = []) => 
       console.log('endVideoCall: Call already ended, skipping cleanup');
       return;
     }
-    setIsCallEnded(true);
     if (localStream) {
       localStream.getTracks().forEach(track => {
         track.stop();
@@ -263,7 +262,9 @@ const useWebRTC = (userId, targetId, isGroupCall = false, groupMembers = []) => 
       socket.emit('end-call', { to: isGroupCall ? groupMembers.map(m => m._id).filter(id => id !== userId) : [targetId], groupId: isGroupCall ? targetId : null });
       console.log('endVideoCall: Emitted end-call to', isGroupCall ? 'group members' : targetId);
     }
+    setIsCallEnded(true);
     console.log('endVideoCall: Camera and stream cleanup completed');
+
   };
 
   const toggleMic = () => {
