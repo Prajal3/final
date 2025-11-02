@@ -1,5 +1,5 @@
 import { useEffect, useState, useRef } from 'react';
-import { ImageIcon, SendHorizonal, Video, Mic, MicOff, VideoOff, Maximize2, Minimize2, X, RefreshCw } from 'lucide-react';
+import { ImageIcon, SendHorizonal, Video, Mic, MicOff, VideoOff, Maximize2, Minimize2, X, RefreshCw, Phone, PhoneMissed } from 'lucide-react';
 import useAuth from '../hooks/useAuth';
 import { useParams } from 'react-router-dom';
 import API from '../api/api';
@@ -38,30 +38,71 @@ const MessageList = ({ messages, user }) => {
   return (
     <div className="space-y-4 max-w-4xl mx-auto">
       <AnimatePresence>
-        {messages.map((message, index) => (
-          <motion.div
-            key={message._id || index}
-            className={`flex flex-col ${message.sender === user._id ? 'items-end' : 'items-start'}`}
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: -20 }}
-            transition={{ duration: 0.3 }}
-          >
-            <div
-              className={`p-3 text-sm max-w-sm rounded-lg shadow-md ${
-                message.sender === user._id ? 'bg-blue-100 text-slate-700 rounded-br-none' : 'bg-indigo-100 text-slate-700 rounded-bl-none'
-              }`}
+        {messages.map((message, index) => {
+          const isCallMessage = message.message_type === 'call';
+          
+          if (isCallMessage) {
+            const isMissed = message.text.toLowerCase().includes('missed');
+            const isDeclined = message.text.toLowerCase().includes('declined');
+            const isSentByMe = message.sender === user._id;
+            
+            // Call messages aligned like regular messages
+            return (
+              <motion.div
+                key={message._id || index}
+                className={`flex flex-col ${isSentByMe ? 'items-end' : 'items-start'}`}
+                initial={{ opacity: 0, y: 20 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -20 }}
+                transition={{ duration: 0.3 }}
+              >
+                <div className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm shadow-sm ${
+                  isMissed 
+                    ? 'bg-red-100 text-red-700 border border-red-200' 
+                    : isDeclined
+                    ? 'bg-gray-100 text-gray-600 border border-gray-200'
+                    : isSentByMe
+                    ? 'bg-blue-50 text-blue-700 border border-blue-200'
+                    : 'bg-indigo-50 text-indigo-700 border border-indigo-200'
+                }`}>
+                  {isMissed ? <PhoneMissed size={16} /> : <Video size={16} />}
+                  <div className="flex flex-col">
+                    <span className="font-medium">{message.text}</span>
+                    <span className="text-xs opacity-60 mt-0.5">
+                      {new Date(message.createdAt).toLocaleTimeString()}
+                    </span>
+                  </div>
+                </div>
+              </motion.div>
+            );
+          }
+          
+          // Regular messages
+          return (
+            <motion.div
+              key={message._id || index}
+              className={`flex flex-col ${message.sender === user._id ? 'items-end' : 'items-start'}`}
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -20 }}
+              transition={{ duration: 0.3 }}
             >
-              {message.message_type === 'image' && (
-                <img src={message.media_url} className="w-full max-w-sm rounded-lg mb-2" alt="Message media" />
-              )}
-              <p>{message.text}</p>
-              <span className="text-xs text-gray-400 mt-1 block">
-                {new Date(message.createdAt).toLocaleTimeString()}
-              </span>
-            </div>
-          </motion.div>
-        ))}
+              <div
+                className={`p-3 text-sm max-w-sm rounded-lg shadow-md ${
+                  message.sender === user._id ? 'bg-blue-100 text-slate-700 rounded-br-none' : 'bg-indigo-100 text-slate-700 rounded-bl-none'
+                }`}
+              >
+                {message.message_type === 'image' && (
+                  <img src={message.media_url} className="w-full max-w-sm rounded-lg mb-2" alt="Message media" />
+                )}
+                <p>{message.text}</p>
+                <span className="text-xs text-gray-400 mt-1 block">
+                  {new Date(message.createdAt).toLocaleTimeString()}
+                </span>
+              </div>
+            </motion.div>
+          );
+        })}
       </AnimatePresence>
     </div>
   );
@@ -113,10 +154,13 @@ const ChatBox = () => {
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState('');
   const [showIncomingCallModal, setShowIncomingCallModal] = useState(false);
+  const [callStartTime, setCallStartTime] = useState(null);
   const { user } = useAuth();
   const { userId } = useParams();
   const messageEndRef = useRef(null);
   const hasAcceptedCallRef = useRef(false);
+  const callTimeoutRef = useRef(null);
+  const incomingCallIdRef = useRef(null);
 
   // WebRTC hook
   const {
@@ -138,15 +182,106 @@ const ChatBox = () => {
     remoteStreams,
   } = useWebRTC(user?._id, userId);
 
-  // Handle incoming call in ChatBox
+  // Create call message in chat
+  const createCallMessage = async (callType, callStatusType, duration = null) => {
+    try {
+      await API.post('/message/call-message', {
+        sender: user._id,
+        receiver: userId,
+        callType,
+        callStatus: callStatusType,
+        duration,
+      }, { withCredentials: true });
+    } catch (error) {
+      console.error('Error creating call message:', error);
+    }
+  };
+
+  // Track when call starts
+  useEffect(() => {
+    if (isVideoCallActive && !callStartTime) {
+      setCallStartTime(Date.now());
+      console.log('📞 Call started, timestamp recorded');
+      
+      // Clear missed call timeout if call is answered
+      if (callTimeoutRef.current) {
+        clearTimeout(callTimeoutRef.current);
+        callTimeoutRef.current = null;
+      }
+    } else if (!isVideoCallActive && callStartTime) {
+      // Call ended, calculate duration
+      const duration = Math.floor((Date.now() - callStartTime) / 1000);
+      console.log('📞 Call ended, duration:', duration, 'seconds');
+      
+      // Only log if call was actually connected (duration > 0)
+      if (duration > 0) {
+        createCallMessage('video', 'ended', duration);
+      }
+      setCallStartTime(null);
+    }
+  }, [isVideoCallActive, callStartTime]);
+
+  // Handle incoming call timeout (missed call)
   useEffect(() => {
     if (incomingCall && incomingCall.from === userId) {
       console.log('📞 Incoming call modal shown in ChatBox');
       setShowIncomingCallModal(true);
+      incomingCallIdRef.current = incomingCall.callId;
+      
+      // Set 30 second timeout for missed call
+      callTimeoutRef.current = setTimeout(() => {
+        console.log('⏰ Call timeout - marking as missed');
+        
+        // Auto-reject the call
+        socket.emit('call-rejected', {
+          to: incomingCall.from,
+          callId: incomingCall.callId,
+          groupId: incomingCall.groupId,
+        });
+        
+        // Create missed call message
+        createCallMessage('video', 'missed');
+        
+        // Close modal
+        setShowIncomingCallModal(false);
+        incomingCallIdRef.current = null;
+      }, 30000); // 30 seconds
+      
     } else {
       setShowIncomingCallModal(false);
+      
+      // Clear timeout if modal is closed
+      if (callTimeoutRef.current) {
+        clearTimeout(callTimeoutRef.current);
+        callTimeoutRef.current = null;
+      }
     }
+    
+    // Cleanup on unmount
+    return () => {
+      if (callTimeoutRef.current) {
+        clearTimeout(callTimeoutRef.current);
+      }
+    };
   }, [incomingCall, userId]);
+
+  // Listen for call-rejected events to mark as missed for caller
+  useEffect(() => {
+    const handleCallRejected = (data) => {
+      console.log('📵 Call rejected event received:', data);
+      
+      // If we're the one who initiated the call and it was rejected after timeout
+      if (data.to === user._id && data.missed) {
+        createCallMessage('video', 'missed');
+      }
+    };
+
+    socket.on('call-rejected', handleCallRejected);
+
+    return () => {
+      socket.off('call-rejected', handleCallRejected);
+    };
+  }, [user?._id]);
 
   // Check for pending call from global modal - only once
   useEffect(() => {
@@ -383,11 +518,19 @@ const ChatBox = () => {
                 <button
                   onClick={() => {
                     console.log('❌ Call rejected from ChatBox');
+                    
+                    // Clear timeout
+                    if (callTimeoutRef.current) {
+                      clearTimeout(callTimeoutRef.current);
+                      callTimeoutRef.current = null;
+                    }
+                    
                     socket.emit('call-rejected', {
                       to: incomingCall.from,
                       callId: incomingCall.callId,
                       groupId: incomingCall.groupId,
                     });
+                    createCallMessage('video', 'rejected');
                     setShowIncomingCallModal(false);
                   }}
                   className="flex items-center gap-2 px-6 py-3 bg-red-500 text-white rounded-full hover:bg-red-600 transition"
@@ -398,6 +541,13 @@ const ChatBox = () => {
                 <button
                   onClick={() => {
                     console.log('✅ Call accepted from ChatBox');
+                    
+                    // Clear timeout
+                    if (callTimeoutRef.current) {
+                      clearTimeout(callTimeoutRef.current);
+                      callTimeoutRef.current = null;
+                    }
+                    
                     setShowIncomingCallModal(false);
                     acceptCall(incomingCall);
                   }}

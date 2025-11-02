@@ -115,3 +115,73 @@ export const fetchLatestMessage = async (req, res) => {
         return res.status(500).json({ message: "Internal Server Error!" });
     }
 };
+
+// NEW: Create a call message in the chat
+export const createCallMessage = async (req, res) => {
+    const { sender, receiver, callType, callStatus, duration } = req.body;
+
+    try {
+        if (!sender || !receiver) {
+            return res.status(400).json({ message: "Sender and receiver are required." });
+        }
+
+        // Get user info to personalize message
+        const senderUser = req.user; // Assuming auth middleware attaches user
+        
+        let callText = '';
+        switch (callStatus) {
+            case 'missed':
+                callText = 'Missed call';
+                break;
+            case 'rejected':
+                callText = 'Call declined';
+                break;
+            case 'ended':
+                if (duration) {
+                    const minutes = Math.floor(duration / 60);
+                    const seconds = duration % 60;
+                    callText = `Video call • ${minutes > 0 ? `${minutes}m ` : ''}${seconds}s`;
+                } else {
+                    callText = 'Video call';
+                }
+                break;
+            case 'cancelled':
+                callText = 'Call cancelled';
+                break;
+            default:
+                callText = 'Video call';
+        }
+
+        // Save message in DB with special call message type
+        const message = await Message.create({
+            sender,
+            receiver,
+            text: callText,
+            message_type: 'call',
+            media_url: '', // You can store call metadata here if needed
+        });
+
+        // Emit message to both sender and receiver in real-time
+        const messageData = {
+            _id: message._id,
+            sender,
+            receiver,
+            text: callText,
+            message_type: 'call',
+            media_url: '',
+            createdAt: message.createdAt,
+        };
+
+        emitToUser(receiver, "receive-message", messageData);
+        emitToUser(sender, "receive-message", messageData);
+
+        return res.status(200).json({
+            message: "Call message created successfully",
+            data: messageData
+        });
+
+    } catch (error) {
+        console.error("Call message error:", error);
+        return res.status(500).json({ message: "Internal Server Error!" });
+    }
+};

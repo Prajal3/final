@@ -21,13 +21,13 @@ let reconnectAttempts = 0;
 export const connectSocket = (userId) => {
   // Prevent duplicate connections for the same user
   if (isConnected && currentUserId === userId) {
-    console.log('✅ Socket already connected for user:', userId);
+    console.log(' Socket already connected for user:', userId);
     return;
   }
 
   // If switching users, disconnect first
   if (isConnected && currentUserId !== userId) {
-    console.log('🔄 Switching users, disconnecting old connection...');
+    console.log(' Switching users, disconnecting old connection...');
     disconnectSocket();
   }
 
@@ -37,9 +37,9 @@ export const connectSocket = (userId) => {
     isConnected = true;
     currentUserId = userId;
     reconnectAttempts = 0;
-    console.log('✅ Socket connected for user:', userId);
+    console.log(' Socket connected for user:', userId);
   } catch (error) {
-    console.error('❌ Socket connection error:', error);
+    console.error('Socket connection error:', error);
     isConnected = false;
   }
 };
@@ -63,7 +63,7 @@ export const getSocketStatus = () => ({
 
 // Setup event listeners for connection monitoring
 socket.on('connect', () => {
-  console.log('🟢 Socket.IO connected:', socket.id);
+  console.log(' Socket.IO connected:', socket.id);
   isConnected = true;
   
   // Re-register user on reconnect
@@ -74,7 +74,7 @@ socket.on('connect', () => {
 });
 
 socket.on('disconnect', (reason) => {
-  console.log('🔴 Socket.IO disconnected:', reason);
+  console.log(' Socket.IO disconnected:', reason);
   isConnected = false;
   
   // Auto-reconnect on unexpected disconnect
@@ -89,17 +89,17 @@ socket.on('disconnect', (reason) => {
 });
 
 socket.on('connect_error', (error) => {
-  console.error('❌ Socket connection error:', error.message);
+  console.error(' Socket connection error:', error.message);
   isConnected = false;
 });
 
 socket.on('reconnect', (attemptNumber) => {
-  console.log('🔄 Socket reconnected after', attemptNumber, 'attempts');
+  console.log(' Socket reconnected after', attemptNumber, 'attempts');
   reconnectAttempts = 0;
 });
 
 socket.on('reconnect_failed', () => {
-  console.error('❌ Socket reconnection failed after all attempts');
+  console.error(' Socket reconnection failed after all attempts');
   isConnected = false;
 });
 

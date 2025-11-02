@@ -28,7 +28,7 @@ export const setUpSocket = (server) => {
   });
 
   io.on('connection', (socket) => {
-    console.log(`✅ Socket connected: ${socket.id}`);
+    console.log(` Socket connected: ${socket.id}`);
 
     // Register user
     socket.on('register', (userId) => {
@@ -51,7 +51,7 @@ export const setUpSocket = (server) => {
       onlineUsers.set(userId, socket.id);
       userSockets.set(socket.id, userId);
       
-      console.log(`👤 User ${userId} registered with socket ${socket.id}`);
+      console.log(` User ${userId} registered with socket ${socket.id}`);
       
       // Broadcast online status
       socket.broadcast.emit('user-online', { userId });
@@ -61,21 +61,21 @@ export const setUpSocket = (server) => {
     socket.on('get-online-users', () => {
       const onlineUsersList = Array.from(onlineUsers.keys());
       socket.emit('online-users', onlineUsersList);
-      console.log(`📋 Sent online users list: ${onlineUsersList.length} users`);
+      console.log(` Sent online users list: ${onlineUsersList.length} users`);
     });
 
     // Join group
     socket.on('join-group', (groupId) => {
       if (!groupId) return;
       socket.join(groupId);
-      console.log(`👥 Socket ${socket.id} joined group ${groupId}`);
+      console.log(` Socket ${socket.id} joined group ${groupId}`);
     });
 
     // Leave group
     socket.on('leave-group', (groupId) => {
       if (!groupId) return;
       socket.leave(groupId);
-      console.log(`👋 Socket ${socket.id} left group ${groupId}`);
+      console.log(` Socket ${socket.id} left group ${groupId}`);
     });
 
     // Group messages
@@ -84,7 +84,7 @@ export const setUpSocket = (server) => {
       if (!groupId) return;
       
       socket.to(groupId).emit('receive-group-message', data);
-      console.log(`💬 Group message sent to ${groupId}`);
+      console.log(` Group message sent to ${groupId}`);
     });
 
     // ==================== VIDEO CALL HANDLERS ====================
@@ -101,7 +101,7 @@ export const setUpSocket = (server) => {
       
       if (groupId) {
         // Group call
-        console.log(`📞 Group call initiated by ${socket.userId} to group ${groupId}, callId: ${finalCallId}`);
+        console.log(` Group call initiated by ${socket.userId} to group ${groupId}, callId: ${finalCallId}`);
         
         activeCalls.set(finalCallId, {
           initiator: socket.userId,
@@ -122,12 +122,12 @@ export const setUpSocket = (server) => {
         const receiverSocketId = onlineUsers.get(to);
         
         if (!receiverSocketId) {
-          console.log(`❌ User ${to} is offline`);
+          console.log(` User ${to} is offline`);
           socket.emit('user-offline', { userId: to });
           return;
         }
 
-        console.log(`📞 Call initiated from ${socket.userId} to ${to}, callId: ${finalCallId}`);
+        console.log(` Call initiated from ${socket.userId} to ${to}, callId: ${finalCallId}`);
         
         activeCalls.set(finalCallId, {
           initiator: socket.userId,
@@ -148,7 +148,7 @@ export const setUpSocket = (server) => {
     socket.on('call-accepted', ({ to, answer, callId, groupId }) => {
       if (!socket.userId) return;
 
-      console.log(`✅ Call accepted by ${socket.userId} for callId: ${callId}`);
+      console.log(` Call accepted by ${socket.userId} for callId: ${callId}`);
 
       const call = activeCalls.get(callId);
       if (call && !call.participants.includes(socket.userId)) {
@@ -165,7 +165,7 @@ export const setUpSocket = (server) => {
             from: socket.userId,
             groupId,
           });
-          console.log(`✅ Group call accepted by ${socket.userId} for caller ${to}`);
+          console.log(` Group call accepted by ${socket.userId} for caller ${to}`);
         }
       } else {
         // For 1-on-1, notify the caller
@@ -176,16 +176,16 @@ export const setUpSocket = (server) => {
             callId,
             from: socket.userId,
           });
-          console.log(`✅ Call accepted: ${socket.userId} -> ${to}, callId: ${callId}`);
+          console.log(` Call accepted: ${socket.userId} -> ${to}, callId: ${callId}`);
         } else {
-          console.log(`❌ Cannot notify ${to} - not online`);
+          console.log(` Cannot notify ${to} - not online`);
         }
       }
     });
 
     // Reject call
     socket.on('call-rejected', ({ to, callId, groupId }) => {
-      console.log(`❌ Call rejected by ${socket.userId}, callId: ${callId}`);
+      console.log(`Call rejected by ${socket.userId}, callId: ${callId}`);
       
       const call = activeCalls.get(callId);
       if (call) {
@@ -195,12 +195,12 @@ export const setUpSocket = (server) => {
       if (groupId) {
         // Notify the group
         socket.to(groupId).emit('call-rejected', { callId });
-        console.log(`❌ Group call ${callId} rejected`);
+        console.log(` Group call ${callId} rejected`);
       } else if (to) {
         const receiverSocketId = onlineUsers.get(to);
         if (receiverSocketId) {
           io.to(receiverSocketId).emit('call-rejected', { callId });
-          console.log(`❌ Call ${callId} rejected, notified ${to}`);
+          console.log(` Call ${callId} rejected, notified ${to}`);
         }
       }
     });
@@ -258,7 +258,7 @@ export const setUpSocket = (server) => {
     // ==================== DISCONNECT HANDLER ====================
 
     socket.on('disconnect', (reason) => {
-      console.log(`❌ Socket disconnected: ${socket.id}, reason: ${reason}`);
+      console.log(` Socket disconnected: ${socket.id}, reason: ${reason}`);
       
       const userId = userSockets.get(socket.id);
       if (userId) {
@@ -291,7 +291,7 @@ export const setUpSocket = (server) => {
     });
   });
 
-  console.log('🚀 Socket.IO server initialized');
+  console.log(' Socket.IO server initialized');
 };
 
 // Utility functions
@@ -304,11 +304,11 @@ export const emitToUser = (userId, event, payload) => {
   const socketId = onlineUsers.get(userId?.toString());
   if (socketId) {
     io.to(socketId).emit(event, payload);
-    console.log(`📤 Emitted ${event} to user ${userId}`);
+    console.log(`Emitted ${event} to user ${userId}`);
     return true;
   }
   
-  console.log(`⚠️ User ${userId} not online`);
+  console.log(` User ${userId} not online`);
   return false;
 };
 
@@ -319,7 +319,7 @@ export const emitToGroup = (groupId, event, payload) => {
   }
 
   io.to(groupId).emit(event, payload);
-  console.log(`📤 Emitted ${event} to group ${groupId}`);
+  console.log(` Emitted ${event} to group ${groupId}`);
   return true;
 };
 

@@ -90,17 +90,20 @@ const CreatePost = () => {
                 
                 {/* Images */}
                 {
-                  image.length > 0 && <div className='flex flex-wrap gap-2 mt-4'>
-                    {image.map((image, i)=> (
-                      <div key={i} className='relative group'>
-                        <img src={URL.createObjectURL(image)} className='h-20 rounded-md' alt="" />
-                        <div onClick={()=> setImages(images.filter((_,index)=> index !==i))} className='absolute hidden group-hover:flex justify-center items-center top-0 right-0 bottom-0 left-0 bg-black/40 rounded-md cursor-pointer'>
-                          <X className='w-6 h-6 text-white' />
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                }
+  image.length > 0 && <div className='flex flex-wrap gap-2 mt-4'>
+    {image.map((img, i)=> (
+      <div key={i} className='relative group'>
+        <img src={URL.createObjectURL(img)} className='h-20 rounded-md' alt="" />
+        <div 
+          onClick={()=> setImages(image.filter((_,index)=> index !== i))} 
+          className='absolute hidden group-hover:flex justify-center items-center top-0 right-0 bottom-0 left-0 bg-black/40 rounded-md cursor-pointer'
+        >
+          <X className='w-6 h-6 text-white' />
+        </div>
+      </div>
+    ))}
+  </div>
+}
 
                 {/* Bottom Bar */}
                   <div className='flex items-center justify-between pt-3 border-t border-gray-300'>
