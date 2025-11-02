@@ -144,7 +144,7 @@ const signup = async (formData) => {
         
         // Navigate to dashboard
         setTimeout(() => {
-          navigate(ROUTES.DASHBOARD);
+          navigate(ROUTES.LOGIN);
         }, 1500);
       }
 

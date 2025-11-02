@@ -346,6 +346,28 @@ const ChatBox = () => {
     fetchMessages();
   }, [userId]);
 
+  useEffect(() => {
+  // Check for pending call from global modal
+  const pendingCallData = sessionStorage.getItem('pendingCall');
+  if (pendingCallData) {
+    try {
+      const callData = JSON.parse(pendingCallData);
+      console.log('Found pending call:', callData);
+      
+      // Clear the stored data
+      sessionStorage.removeItem('pendingCall');
+      
+      // Accept the call
+      if (callData.from === userId || !callData.groupId) {
+        acceptCall(callData);
+      }
+    } catch (error) {
+      console.error('Error processing pending call:', error);
+      sessionStorage.removeItem('pendingCall');
+    }
+  }
+}, [userId, acceptCall]);
+
   if (isLoading) {
     return <div className="flex justify-center items-center h-screen text-gray-600">Loading...</div>;
   }
@@ -428,14 +450,17 @@ const ChatBox = () => {
 
       {/* Local Video Element (Always Mounted) */}
       <video
-        ref={localVideoRef}
-        autoPlay
-        muted
-        playsInline
-        className="hidden"
-        onError={(e) => console.error('Local video error:', e)}
-        onCanPlay={() => console.log('Local video can play')}
-      />
+  ref={localVideoRef}
+  autoPlay
+  muted
+  playsInline
+  className={isVideoCallActive ? "w-full md:w-64 rounded-lg shadow" : "hidden"}
+  onLoadedMetadata={() => {
+    console.log('Local video metadata loaded');
+    localVideoRef.current?.play().catch(e => console.error('Local play error:', e));
+  }}
+/>
+
 
       {/* Video Call UI */}
       <AnimatePresence>
@@ -474,40 +499,36 @@ const ChatBox = () => {
                   </div>
                 )}
               </div>
-              {Object.keys(remoteStreams).map((remoteUserId) => (
-                <div key={remoteUserId} className="relative">
-                  <h3 className="text-sm font-medium mb-2">Remote {remoteUserId}</h3>
-                  <video
-                    ref={(el) => {
-                      if (el) {
-                        remoteVideoRefs.current[remoteUserId].current = el;
-                        console.log(`Assigned video ref for ${remoteUserId}:`, el);
-                      }
-                    }}
-                    autoPlay
-                    playsInline
-                    className="w-full md:w-64 rounded-lg shadow"
-                    onError={(e) => console.error(`Remote video error for ${remoteUserId}:`, e)}
-                    onCanPlay={() => console.log(`Remote video can play for ${remoteUserId}`)}
-                    onLoadedMetadata={() => console.log(`Remote video metadata loaded for ${remoteUserId}`)}
-                  />
-                  {!remoteStreams[remoteUserId] && (
-                    <div className="absolute inset-0 bg-gray-800 flex items-center justify-center rounded-lg">
-                      <span className="text-white">Waiting for remote video...</span>
-                    </div>
-                  )}
-                  {remoteStreams[remoteUserId] && remoteStreams[remoteUserId].getVideoTracks().length === 0 && (
-                    <div className="absolute inset-0 bg-gray-800 flex items-center justify-center rounded-lg">
-                      <span className="text-white">No remote video track available</span>
-                    </div>
-                  )}
-                  {!remoteVideoRefs.current[remoteUserId]?.current && remoteStreams[remoteUserId] && (
-                    <div className="absolute inset-0 bg-gray-800 flex items-center justify-center rounded-lg">
-                      <span className="text-white">Loading remote video...</span>
-                    </div>
-                  )}
-                </div>
-              ))}
+              {Object.entries(remoteStreams).map(([remoteUserId, stream]) => (
+  <div key={remoteUserId} className="relative">
+    <h3 className="text-sm font-medium mb-2 text-white">
+      {remoteUserId.substring(0, 8)}...
+    </h3>
+    <video
+      ref={(el) => {
+        if (el && remoteVideoRefs.current[remoteUserId]) {
+          remoteVideoRefs.current[remoteUserId].current = el;
+          if (stream && el.srcObject !== stream) {
+            el.srcObject = stream;
+            el.play().catch(e => console.error('Remote play error:', e));
+          }
+        }
+      }}
+      autoPlay
+      playsInline
+      className="w-full md:w-64 rounded-lg shadow"
+      onLoadedMetadata={(e) => {
+        console.log(`Remote video metadata loaded for ${remoteUserId}`);
+        e.target.play().catch(err => console.error('Play error:', err));
+      }}
+    />
+    {(!stream || stream.getTracks().length === 0) && (
+      <div className="absolute inset-0 bg-gray-800 flex items-center justify-center rounded-lg">
+        <span className="text-white text-sm">Connecting...</span>
+      </div>
+    )}
+  </div>
+))}
               <div className="flex gap-2 mt-4 justify-center">
                 <button
                   onClick={toggleMic}

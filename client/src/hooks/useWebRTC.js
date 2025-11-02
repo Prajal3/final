@@ -1,11 +1,11 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, useCallback } from 'react';
 import { socket } from '../utils/socket';
 
 const useWebRTC = (userId, targetId, isGroupCall = false, groupMembers = []) => {
   const localVideoRef = useRef(null);
   const remoteVideoRefs = useRef({});
   const peerConnectionsRef = useRef({});
-  const candidatesRef = useRef({});
+  const localStreamRef = useRef(null);
   const [localStream, setLocalStream] = useState(null);
   const [remoteStreams, setRemoteStreams] = useState({});
   const [isVideoCallActive, setIsVideoCallActive] = useState(false);
@@ -14,368 +14,472 @@ const useWebRTC = (userId, targetId, isGroupCall = false, groupMembers = []) => 
   const [isCameraOn, setIsCameraOn] = useState(true);
   const [isFullScreen, setIsFullScreen] = useState(false);
   const [incomingCall, setIncomingCall] = useState(null);
-  const [isCallEnded, setIsCallEnded] = useState(false);
-  const [callInitiator, setCallInitiator] = useState(false);
-  const remoteStreamIdsRef = useRef({});
+  const activeCallIdRef = useRef(null);
+  const pendingCandidatesRef = useRef({});
+  const isInitiatorRef = useRef(false);
+  const cleanupInProgressRef = useRef(false);
 
-  // Initialize remoteVideoRefs only when necessary
+  const ICE_SERVERS = {
+    iceServers: [
+      { urls: 'stun:stun.l.google.com:19302' },
+      { urls: 'stun:stun1.l.google.com:19302' },
+      { urls: 'stun:stun2.l.google.com:19302' },
+      { urls: 'stun:stun3.l.google.com:19302' },
+      { urls: 'stun:stun4.l.google.com:19302' },
+    ],
+    iceCandidatePoolSize: 10,
+  };
+
+  // Initialize remote video refs
   useEffect(() => {
+    const targets = isGroupCall
+      ? groupMembers.filter(m => m._id !== userId).map(m => m._id)
+      : [targetId].filter(Boolean);
+
     const newRefs = {};
-    if (isGroupCall) {
-      groupMembers
-        .filter(member => member._id !== userId)
-        .forEach(member => {
-          newRefs[member._id] = remoteVideoRefs.current[member._id] || { current: null };
-        });
-    } else if (targetId) {
-      newRefs[targetId] = remoteVideoRefs.current[targetId] || { current: null };
-    }
-    remoteVideoRefs.current = newRefs;
-    console.log('Initialized remoteVideoRefs:', remoteVideoRefs.current);
-  }, [userId, targetId, isGroupCall, groupMembers.map(m => m._id).join(',')]);
-
-  const createPeerConnection = (remoteUserId) => {
-    const pc = new RTCPeerConnection({
-      iceServers: [
-        { urls: 'stun:stun.l.google.com:19302' },
-        { urls: 'stun:stun1.l.google.com:19302' },
-        { urls: 'stun:stun2.l.google.com:19302' },
-      ],
+    targets.forEach(id => {
+      if (!remoteVideoRefs.current[id]) {
+        newRefs[id] = { current: null };
+      } else {
+        newRefs[id] = remoteVideoRefs.current[id];
+      }
     });
+    remoteVideoRefs.current = newRefs;
+  }, [userId, targetId, isGroupCall, groupMembers]);
 
+  // Create peer connection
+  const createPeerConnection = useCallback((remoteUserId) => {
+    if (peerConnectionsRef.current[remoteUserId]) {
+      console.log(`Peer connection already exists for ${remoteUserId}`);
+      return peerConnectionsRef.current[remoteUserId];
+    }
+
+    const pc = new RTCPeerConnection(ICE_SERVERS);
+    
     pc.onicecandidate = (event) => {
-      if (event.candidate && !isCallEnded) {
-        console.log(`Sending ICE candidate to ${remoteUserId}:`, event.candidate);
+      if (event.candidate && activeCallIdRef.current) {
+        console.log(`Sending ICE candidate to ${remoteUserId}`);
         socket.emit('peer-negotiation-needed', {
           to: remoteUserId,
           candidate: event.candidate.toJSON(),
+          callId: activeCallIdRef.current,
           groupId: isGroupCall ? targetId : null,
         });
       }
     };
 
     pc.ontrack = (event) => {
-      console.log(`Received remote track from ${remoteUserId}:`, event.streams);
-      const [remote] = event.streams;
-      if (remote) {
-        if (remoteStreamIdsRef.current[remoteUserId] === remote.id) {
-          console.log(`Skipping duplicate remote stream from ${remoteUserId}:`, remote.id);
-          return;
-        }
-        console.log(`Remote stream tracks from ${remoteUserId}:`, remote.getTracks());
-        remote.getTracks().forEach(track => {
-          console.log(`Track kind: ${track.kind}, enabled: ${track.enabled}, readyState: ${track.readyState}`);
-          if (track.kind === 'video') {
-            console.log(`Video track details: width=${track.getSettings().width}, height=${track.getSettings().height}, frameRate=${track.getSettings().frameRate}`);
+      console.log(`Received track from ${remoteUserId}:`, event.streams[0]);
+      const [stream] = event.streams;
+      if (stream && stream.active) {
+        setRemoteStreams(prev => {
+          if (prev[remoteUserId]?.id === stream.id) {
+            console.log(`Duplicate stream ignored for ${remoteUserId}`);
+            return prev;
           }
+          return { ...prev, [remoteUserId]: stream };
         });
-        remoteStreamIdsRef.current[remoteUserId] = remote.id;
-        setRemoteStreams(prev => ({ ...prev, [remoteUserId]: remote }));
       }
     };
 
     pc.oniceconnectionstatechange = () => {
-      console.log(`ICE connection state for ${remoteUserId}:`, pc.iceConnectionState);
-      if (pc.iceConnectionState === 'failed' || pc.iceConnectionState === 'disconnected') {
-        setCallStatus(`Connection to ${remoteUserId} disconnected. Attempting to reconnect...`);
-        setTimeout(() => {
-          if (pc.iceConnectionState !== 'connected') {
-            endVideoCall();
-          }
-        }, 5000);
-      } else if (pc.iceConnectionState === 'connected') {
+      console.log(`ICE state for ${remoteUserId}: ${pc.iceConnectionState}`);
+      
+      if (pc.iceConnectionState === 'connected') {
         setCallStatus('Connected');
-      }
-    };
-
-    pc.onsignalingstatechange = () => {
-      console.log(`Signaling state for ${remoteUserId}:`, pc.signalingState);
-      if (pc.signalingState === 'closed') {
-        endVideoCall();
-      }
-    };
-
-    return pc;
-  };
-
-  const processQueuedCandidates = async (remoteUserId) => {
-    const pc = peerConnectionsRef.current[remoteUserId];
-    if (pc) {
-      while (candidatesRef.current[remoteUserId]?.length) {
-        const candidate = candidatesRef.current[remoteUserId].shift();
-        try {
-          await pc.addIceCandidate(new RTCIceCandidate(candidate));
-          console.log(`Added queued ICE candidate for ${remoteUserId}:`, candidate);
-        } catch (error) {
-          console.error(`Error adding queued ICE candidate for ${remoteUserId}:`, error);
+      } else if (pc.iceConnectionState === 'failed' || pc.iceConnectionState === 'disconnected') {
+        setCallStatus(`Connection issue with ${remoteUserId}`);
+        
+        // Attempt ICE restart
+        if (pc.iceConnectionState === 'failed') {
+          console.log(`ICE restart for ${remoteUserId}`);
+          pc.restartIce();
         }
       }
-    }
-  };
+    };
 
-  const startVideoCall = async () => {
-    try {
-      setCallStatus('Calling...');
-      setIsCallEnded(false);
-      setCallInitiator(true);
-      candidatesRef.current = {};
-      remoteStreamIdsRef.current = {};
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: true,
-        audio: true,
-      }).catch(error => {
-        throw new Error('Permission denied or device unavailable');
-      });
-      stream.getVideoTracks().forEach(track => {
-        track.enabled = true;
-        console.log('Video track enabled:', track.enabled);
-      });
-      setLocalStream(stream);
-      console.log('Local stream obtained:', stream);
-
-      setIsVideoCallActive(true);
-      if (isGroupCall) {
-        peerConnectionsRef.current = {};
-        groupMembers
-          .filter(member => member._id !== userId)
-          .forEach(member => {
-            const remoteUserId = member._id;
-            peerConnectionsRef.current[remoteUserId] = createPeerConnection(remoteUserId);
-            candidatesRef.current[remoteUserId] = [];
-            stream.getTracks().forEach(track => {
-              peerConnectionsRef.current[remoteUserId].addTrack(track, stream);
-            });
-          });
-
-        await Promise.all(
-          Object.keys(peerConnectionsRef.current).map(async (remoteUserId) => {
-            const pc = peerConnectionsRef.current[remoteUserId];
-            const offer = await pc.createOffer();
-            await pc.setLocalDescription(offer);
-            socket.emit('user-call', {
-              to: remoteUserId,
-              offer,
-              groupId: targetId,
-            });
-          })
-        );
-        setCallStatus('Connecting to group...');
-      } else {
-        peerConnectionsRef.current[targetId] = createPeerConnection(targetId);
-        candidatesRef.current[targetId] = [];
-        stream.getTracks().forEach(track => {
-          peerConnectionsRef.current[targetId].addTrack(track, stream);
-        });
-        const offer = await peerConnectionsRef.current[targetId].createOffer();
-        await peerConnectionsRef.current[targetId].setLocalDescription(offer);
-        socket.emit('user-call', { to: targetId, offer });
-        setCallStatus('Connecting...');
+    pc.onconnectionstatechange = () => {
+      console.log(`Connection state for ${remoteUserId}: ${pc.connectionState}`);
+      
+      if (pc.connectionState === 'failed' || pc.connectionState === 'closed') {
+        cleanupPeerConnection(remoteUserId);
       }
-    } catch (error) {
-      console.error('Error starting video call:', error);
-      setCallStatus(error.message === 'Permission denied or device unavailable'
-        ? 'Camera or microphone access denied. Please grant permissions and try again.'
-        : 'Failed to start call. Check camera/microphone permissions and try again.');
-      endVideoCall();
-    }
-  };
+    };
 
-  const acceptCall = async ({ from, offer, groupId }) => {
-    try {
-      setCallStatus('Accepting call...');
-      setIsCallEnded(false);
-      setCallInitiator(false);
-      candidatesRef.current[from] = [];
-      remoteStreamIdsRef.current[from] = null;
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: true,
-        audio: true,
-      }).catch(error => {
-        throw new Error('Permission denied or device unavailable');
-      });
-      stream.getVideoTracks().forEach(track => {
-        track.enabled = true;
-        console.log('Video track enabled:', track.enabled);
-      });
-      setLocalStream(stream);
-      console.log('Local stream obtained:', stream);
+    peerConnectionsRef.current[remoteUserId] = pc;
+    pendingCandidatesRef.current[remoteUserId] = [];
+    
+    return pc;
+  }, [isGroupCall, targetId]);
 
-      setIsVideoCallActive(true);
-      peerConnectionsRef.current[from] = createPeerConnection(from);
-      stream.getTracks().forEach(track => {
-        peerConnectionsRef.current[from].addTrack(track, stream);
-      });
+  // Process pending ICE candidates
+  const processPendingCandidates = useCallback(async (remoteUserId) => {
+    const pc = peerConnectionsRef.current[remoteUserId];
+    const candidates = pendingCandidatesRef.current[remoteUserId] || [];
 
-      await peerConnectionsRef.current[from].setRemoteDescription(new RTCSessionDescription(offer));
-      await processQueuedCandidates(from);
-      const answer = await peerConnectionsRef.current[from].createAnswer();
-      await peerConnectionsRef.current[from].setLocalDescription(answer);
-      socket.emit('call-accepted', { to: from, answer, groupId });
-
-      setIncomingCall(null);
-      setCallStatus('Connected');
-    } catch (error) {
-      console.error('Error accepting call:', error);
-      setCallStatus(error.message === 'Permission denied or device unavailable'
-        ? 'Camera or microphone access denied. Please grant permissions and try again.'
-        : 'Failed to accept call. Check camera/microphone permissions.');
-      setIncomingCall(null);
-      endVideoCall();
-    }
-  };
-
-  const rejectCall = (callId) => {
-    if (incomingCall) {
-      socket.emit('call-rejected', { to: incomingCall.from, callId, groupId: isGroupCall ? targetId : null });
-      setIncomingCall(null);
-      setCallStatus('Call rejected.');
-      setIsCallEnded(true);
-      endVideoCall();
-      console.log('rejectCall: Initiated call rejection and cleanup');
-    }
-  };
-
-  const endVideoCall = () => {
-    if (isCallEnded) {
-      console.log('endVideoCall: Call already ended, skipping cleanup');
+    if (!pc || pc.signalingState === 'closed') {
+      console.log(`Cannot process candidates for ${remoteUserId}: invalid state`);
       return;
     }
-    if (localStream) {
-      localStream.getTracks().forEach(track => {
+
+    while (candidates.length > 0) {
+      const candidate = candidates.shift();
+      try {
+        await pc.addIceCandidate(new RTCIceCandidate(candidate));
+        console.log(`Added queued candidate for ${remoteUserId}`);
+      } catch (error) {
+        console.error(`Error adding candidate for ${remoteUserId}:`, error);
+      }
+    }
+  }, []);
+
+  // Get user media
+  const getUserMedia = async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: {
+          width: { ideal: 1280 },
+          height: { ideal: 720 },
+          frameRate: { ideal: 30 }
+        },
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true
+        }
+      });
+      
+      localStreamRef.current = stream;
+      setLocalStream(stream);
+      return stream;
+    } catch (error) {
+      console.error('getUserMedia error:', error);
+      throw error;
+    }
+  };
+
+  // Start video call
+  const startVideoCall = async () => {
+    if (isVideoCallActive || cleanupInProgressRef.current) {
+      console.log('Call already active or cleanup in progress');
+      return;
+    }
+
+    try {
+      setCallStatus('Starting call...');
+      isInitiatorRef.current = true;
+      
+      const stream = await getUserMedia();
+      setIsVideoCallActive(true);
+      activeCallIdRef.current = Date.now().toString();
+
+      const targets = isGroupCall
+        ? groupMembers.filter(m => m._id !== userId).map(m => m._id)
+        : [targetId];
+
+      for (const remoteUserId of targets) {
+        const pc = createPeerConnection(remoteUserId);
+        
+        // Add tracks
+        stream.getTracks().forEach(track => {
+          pc.addTrack(track, stream);
+        });
+
+        // Create and send offer
+        const offer = await pc.createOffer();
+        await pc.setLocalDescription(offer);
+
+        socket.emit('user-call', {
+          to: remoteUserId,
+          offer: offer,
+          groupId: isGroupCall ? targetId : null,
+        });
+      }
+
+      setCallStatus('Calling...');
+    } catch (error) {
+      console.error('Start call error:', error);
+      setCallStatus('Failed to start call: ' + error.message);
+      endVideoCall();
+    }
+  };
+
+  // Accept call
+  const acceptCall = async ({ from, offer, callId, groupId }) => {
+    if (isVideoCallActive || cleanupInProgressRef.current) {
+      console.log('Already in call');
+      return;
+    }
+
+    try {
+      setCallStatus('Accepting call...');
+      isInitiatorRef.current = false;
+      activeCallIdRef.current = callId;
+
+      const stream = await getUserMedia();
+      setIsVideoCallActive(true);
+
+      const pc = createPeerConnection(from);
+      
+      // Add tracks
+      stream.getTracks().forEach(track => {
+        pc.addTrack(track, stream);
+      });
+
+      // Set remote description and create answer
+      await pc.setRemoteDescription(new RTCSessionDescription(offer));
+      await processPendingCandidates(from);
+
+      const answer = await pc.createAnswer();
+      await pc.setLocalDescription(answer);
+
+      socket.emit('call-accepted', {
+        to: from,
+        answer: answer,
+        callId: callId,
+        groupId: groupId,
+      });
+
+      setCallStatus('Connected');
+      setIncomingCall(null);
+    } catch (error) {
+      console.error('Accept call error:', error);
+      setCallStatus('Failed to accept call: ' + error.message);
+      endVideoCall();
+    }
+  };
+
+  // Reject call
+  const rejectCall = useCallback((callId) => {
+    if (incomingCall) {
+      socket.emit('call-rejected', {
+        to: incomingCall.from,
+        callId: callId || incomingCall.callId,
+        groupId: incomingCall.groupId,
+      });
+      setIncomingCall(null);
+      setCallStatus('');
+    }
+  }, [incomingCall]);
+
+  // Cleanup peer connection
+  const cleanupPeerConnection = useCallback((remoteUserId) => {
+    const pc = peerConnectionsRef.current[remoteUserId];
+    if (pc) {
+      pc.close();
+      delete peerConnectionsRef.current[remoteUserId];
+    }
+    
+    setRemoteStreams(prev => {
+      const newStreams = { ...prev };
+      delete newStreams[remoteUserId];
+      return newStreams;
+    });
+    
+    delete pendingCandidatesRef.current[remoteUserId];
+  }, []);
+
+  // End video call
+  const endVideoCall = useCallback(() => {
+    if (cleanupInProgressRef.current) {
+      console.log('Cleanup already in progress, skipping...');
+      return;
+    }
+    
+    cleanupInProgressRef.current = true;
+    console.log('Ending call...');
+
+    // Emit end-call FIRST if we're in an active call
+    if (activeCallIdRef.current && isVideoCallActive) {
+      const targets = isGroupCall
+        ? groupMembers.filter(m => m._id !== userId).map(m => m._id)
+        : [targetId].filter(Boolean);
+
+      targets.forEach(to => {
+        socket.emit('end-call', {
+          to,
+          callId: activeCallIdRef.current,
+          groupId: isGroupCall ? targetId : null,
+        });
+      });
+    }
+
+    // Stop local stream
+    if (localStreamRef.current) {
+      localStreamRef.current.getTracks().forEach(track => {
         track.stop();
         console.log('Stopped track:', track.kind);
       });
+      localStreamRef.current = null;
     }
-    Object.values(peerConnectionsRef.current).forEach(pc => {
-      pc.close();
+
+    // Close all peer connections
+    Object.keys(peerConnectionsRef.current).forEach(remoteUserId => {
+      cleanupPeerConnection(remoteUserId);
     });
-    peerConnectionsRef.current = {};
+
+    // Reset state
     setLocalStream(null);
     setRemoteStreams({});
     setIsVideoCallActive(false);
     setIncomingCall(null);
     setCallStatus('');
-    setCallInitiator(false);
-    candidatesRef.current = {};
-    remoteStreamIdsRef.current = {};
-    if (callInitiator || isVideoCallActive) {
-      socket.emit('end-call', { to: isGroupCall ? groupMembers.map(m => m._id).filter(id => id !== userId) : [targetId], groupId: isGroupCall ? targetId : null });
-      console.log('endVideoCall: Emitted end-call to', isGroupCall ? 'group members' : targetId);
-    }
-    setIsCallEnded(true);
-    console.log('endVideoCall: Camera and stream cleanup completed');
+    activeCallIdRef.current = null;
+    isInitiatorRef.current = false;
+    pendingCandidatesRef.current = {};
+    
+    setTimeout(() => {
+      cleanupInProgressRef.current = false;
+    }, 100);
+  }, [isGroupCall, targetId, userId, groupMembers, isVideoCallActive, cleanupPeerConnection]);
 
-  };
-
-  const toggleMic = () => {
-    if (localStream) {
-      localStream.getAudioTracks().forEach(track => {
+  // Toggle mic
+  const toggleMic = useCallback(() => {
+    if (localStreamRef.current) {
+      localStreamRef.current.getAudioTracks().forEach(track => {
         track.enabled = !track.enabled;
       });
       setIsMicOn(prev => !prev);
     }
-  };
+  }, []);
 
-  const toggleCamera = () => {
-    if (localStream) {
-      localStream.getVideoTracks().forEach(track => {
+  // Toggle camera
+  const toggleCamera = useCallback(() => {
+    if (localStreamRef.current) {
+      localStreamRef.current.getVideoTracks().forEach(track => {
         track.enabled = !track.enabled;
-        console.log('Toggled video track:', track.enabled);
       });
       setIsCameraOn(prev => !prev);
     }
-  };
+  }, []);
 
-  const toggleFullScreen = () => {
-    const element = document.getElementById('video-call-container') || document.documentElement;
+  // Toggle fullscreen
+  const toggleFullScreen = useCallback(() => {
+    const element = document.getElementById('video-call-container');
+    if (!element) return;
+
     if (!isFullScreen) {
-      element.requestFullscreen().catch(err => console.error('Full-screen error:', err));
+      element.requestFullscreen?.() || element.webkitRequestFullscreen?.();
     } else {
-      document.exitFullscreen().catch(err => console.error('Exit full-screen error:', err));
+      document.exitFullscreen?.() || document.webkitExitFullscreen?.();
     }
     setIsFullScreen(prev => !prev);
-  };
+  }, [isFullScreen]);
 
+  // Socket event handlers
   useEffect(() => {
-    if (userId) {
-      socket.on('incoming-call', ({ from, offer, callId, groupId }) => {
-        if (!isVideoCallActive && !isCallEnded) {
-          setIncomingCall({ from, offer, callId, groupId });
-          setCallStatus('Incoming call...');
-        } else {
-          socket.emit('call-rejected', { to: from, callId, groupId });
-        }
-      });
+    if (!userId) return;
 
-      socket.on('call-accepted', async ({ answer, callId, from, groupId }) => {
-        try {
-          const pc = peerConnectionsRef.current[from];
-          if (pc && pc.signalingState !== 'closed') {
-            await pc.setRemoteDescription(new RTCSessionDescription(answer));
-            await processQueuedCandidates(from);
-            setCallStatus('Connected');
-          } else {
-            console.warn(`Cannot set remote description for ${from}: Peer connection is closed or null`);
-            setCallStatus('Call failed: Connection closed.');
-            endVideoCall();
-          }
-        } catch (error) {
-          console.error(`Error handling call-accepted from ${from}:`, error);
-          setCallStatus('Failed to connect call.');
-          endVideoCall();
-        }
-      });
+    const handleIncomingCall = ({ from, offer, callId, groupId }) => {
+      console.log('Incoming call from:', from);
+      if (!isVideoCallActive && !cleanupInProgressRef.current) {
+        setIncomingCall({ from, offer, callId, groupId });
+        setCallStatus('Incoming call...');
+      } else {
+        socket.emit('call-rejected', { to: from, callId, groupId });
+      }
+    };
 
-      socket.on('call-rejected', ({ callId }) => {
-        setCallStatus('Call rejected by user.');
+    const handleCallAccepted = async ({ answer, callId, from, groupId }) => {
+      console.log('Call accepted by:', from);
+      const pc = peerConnectionsRef.current[from];
+      
+      if (!pc || pc.signalingState === 'closed') {
+        console.error('Invalid peer connection state');
+        return;
+      }
+
+      try {
+        await pc.setRemoteDescription(new RTCSessionDescription(answer));
+        await processPendingCandidates(from);
+        setCallStatus('Connected');
+      } catch (error) {
+        console.error('Error handling call accepted:', error);
         endVideoCall();
-      });
+      }
+    };
 
-      socket.on('peer-negotiation-needed', ({ candidate, callId, from, groupId }) => {
-        console.log(`Received ICE candidate from ${from}:`, candidate);
-        if (!candidate) return;
-        const pc = peerConnectionsRef.current[from];
-        if (pc && pc.remoteDescription && pc.signalingState !== 'closed') {
-          pc.addIceCandidate(new RTCIceCandidate(candidate))
-            .then(() => console.log(`Added ICE candidate from ${from} successfully`))
-            .catch(error => console.error(`Error adding ICE candidate from ${from}:`, error));
-        } else {
-          candidatesRef.current[from] = candidatesRef.current[from] || [];
-          candidatesRef.current[from].push(candidate);
-          console.log(`Queued ICE candidate from ${from}:`, candidate);
+    const handleCallRejected = ({ callId }) => {
+      console.log('Call rejected');
+      setCallStatus('Call rejected');
+      endVideoCall();
+    };
+
+    const handlePeerNegotiation = ({ candidate, from }) => {
+      if (!candidate) return;
+      
+      const pc = peerConnectionsRef.current[from];
+      
+      if (pc && pc.remoteDescription) {
+        pc.addIceCandidate(new RTCIceCandidate(candidate))
+          .then(() => console.log(`Added ICE candidate from ${from}`))
+          .catch(err => console.error('Error adding ICE candidate:', err));
+      } else {
+        if (!pendingCandidatesRef.current[from]) {
+          pendingCandidatesRef.current[from] = [];
         }
-      });
+        pendingCandidatesRef.current[from].push(candidate);
+        console.log(`Queued ICE candidate from ${from}`);
+      }
+    };
 
-      socket.on('end-call', ({ callId }) => {
-        setCallStatus('Call ended by remote user.');
-        endVideoCall();
-      });
+    const handleEndCall = ({ callId }) => {
+      console.log('Call ended by remote');
+      setCallStatus('Call ended');
+      endVideoCall();
+    };
 
-      socket.on('user-offline', ({ userId: offlineUserId }) => {
-        if (!isGroupCall && offlineUserId === targetId) {
-          setCallStatus('User is offline.');
-          endVideoCall();
-        } else if (isGroupCall && groupMembers.some(m => m._id === offlineUserId)) {
-          setCallStatus(`User ${offlineUserId} is offline.`);
-          delete peerConnectionsRef.current[offlineUserId];
-          setRemoteStreams(prev => {
-            const newStreams = { ...prev };
-            delete newStreams[offlineUserId];
-            return newStreams;
-          });
-        }
-      });
+    const handleUserOffline = ({ userId: offlineUserId }) => {
+      console.log('User offline:', offlineUserId);
+      cleanupPeerConnection(offlineUserId);
+    };
 
-      return () => {
-        socket.off('incoming-call');
-        socket.off('call-accepted');
-        socket.off('call-rejected');
-        socket.off('peer-negotiation-needed');
-        socket.off('end-call');
-        socket.off('user-offline');
-      };
+    socket.on('incoming-call', handleIncomingCall);
+    socket.on('call-accepted', handleCallAccepted);
+    socket.on('call-rejected', handleCallRejected);
+    socket.on('peer-negotiation-needed', handlePeerNegotiation);
+    socket.on('end-call', handleEndCall);
+    socket.on('user-offline', handleUserOffline);
+
+    return () => {
+      socket.off('incoming-call', handleIncomingCall);
+      socket.off('call-accepted', handleCallAccepted);
+      socket.off('call-rejected', handleCallRejected);
+      socket.off('peer-negotiation-needed', handlePeerNegotiation);
+      socket.off('end-call', handleEndCall);
+      socket.off('user-offline', handleUserOffline);
+    };
+  }, [userId, isVideoCallActive, processPendingCandidates, endVideoCall, cleanupPeerConnection]);
+
+  // Assign local stream to video element
+  useEffect(() => {
+    if (localVideoRef.current && localStream) {
+      if (localVideoRef.current.srcObject !== localStream) {
+        localVideoRef.current.srcObject = localStream;
+        localVideoRef.current.play().catch(e => console.error('Local video play error:', e));
+      }
     }
-  }, [userId, targetId, isGroupCall, groupMembers]);
+  }, [localStream]);
+
+  // Assign remote streams to video elements
+  useEffect(() => {
+    Object.entries(remoteStreams).forEach(([remoteUserId, stream]) => {
+      const ref = remoteVideoRefs.current[remoteUserId];
+      if (ref?.current && stream) {
+        if (ref.current.srcObject !== stream) {
+          ref.current.srcObject = stream;
+          ref.current.play().catch(e => console.error(`Remote video play error for ${remoteUserId}:`, e));
+        }
+      }
+    });
+  }, [remoteStreams]);
+
+  // Cleanup on unmount
+  useEffect(() => {
+    return () => {
+      endVideoCall();
+    };
+  }, [endVideoCall]);
 
   return {
     localVideoRef,

@@ -110,17 +110,14 @@ const authReducer = (state, action) => {
         isLoading: false,
       };
 
-    case AUTH_ACTIONS.OTP_VERIFIED:
+   case AUTH_ACTIONS.OTP_VERIFIED:
       return {
         ...state,
-        user: action.payload.user,
-        isAuthenticated: true,
         authState: AUTH_STATES.OTP_VERIFIED,
         isLoading: false,
         error: null,
-        pendingVerificationEmail: null,
+        pendingVerificationEmail: null, 
       };
-
     case AUTH_ACTIONS.SET_REMEMBER_EMAIL:
       return {
         ...state,
@@ -279,14 +276,12 @@ export const AuthProvider = ({ children }) => {
       await new Promise(resolve => setTimeout(resolve, 1000));
 
       dispatch({
-        type: AUTH_ACTIONS.OTP_VERIFIED,
-        payload: { user: data, tokens: data.token },
+        type: AUTH_ACTIONS.SIGNUP_SUCCESS,
+          payload: { email },
       });
 
-      // ⭐ CONNECT SOCKET AFTER OTP VERIFICATION
-      if (data.data?._id) {
-        connectSocket(data.data._id);
-      }
+      return { success: true, email };
+
 
       return { success: true, user: data };
     } catch (error) {
